@@ -1,22 +1,31 @@
 DATE <-
-"Thu May 26 11:35:20 2011"
+"Fri Sep 28 12:16:58 2012"
 VERSION <-
-"4.8.5"
+"4.9.2"
 .onLoad <-
-function( libname, pkgname ) { ##.onAttach
-    packageStartupMessage( "Loading ", pkgname, " version ", VERSION, " (", DATE, ")" )
-    packageStartupMessage( "Copyright (C) David J Reiss, Institute for Systems Biology; dreiss@systemsbiology.org." )
-    packageStartupMessage( "http://baliga.systemsbiology.net/cmonkey" )
-    vers <- try( readLines( "http://baliga.systemsbiology.net/cmonkey/VERSION" ), silent=T )
-    if ( class( vers ) != "try-error" ) {
-      vers <- gsub( " ", "", vers )
-      if ( vers != VERSION ) packageStartupMessage( "\nYou are not using the most current version of cMonkey.\nPlease consider upgrading to v", vers, " via:\n\n> download.file( \"http://baliga.systemsbiology.net/cmonkey/cMonkey_", vers, ".tar.gz\", \n\t\t\"cMonkey_", vers, ".tar.gz\" )\n> install.packages( \"cMonkey_", vers, ".tar.gz\", repos=NULL )\n\nOr by following the instructions on the cMonkey website." )
-      else packageStartupMessage( "Congratulations! You are using the latest version of cMonkey.\n" )
-    } else {
-      packageStartupMessage( "Could not check to see if you are using the latest version of cMonkey." )
+function (libname, pkgname) 
+{
+    packageStartupMessage("Loading ", pkgname, " version ", VERSION, 
+        " (", DATE, ")")
+    packageStartupMessage("Copyright (C) David J Reiss, Institute for Systems Biology; dreiss@systemsbiology.org.")
+    packageStartupMessage("http://cmonkey.systemsbiology.net/")
+    if (grepl("beta", VERSION)) 
+        return()
+    vers <- try(readLines("http://baliga.systemsbiology.net/cmonkey/VERSION"), 
+        silent = T)
+    if (class(vers) != "try-error") {
+        vers <- gsub(" ", "", vers)
+        if (vers != VERSION) 
+            packageStartupMessage("\nYou are not using the most current version of cMonkey.\nPlease consider upgrading to v", 
+                vers, " via:\n\n> download.file( \"http://cmonkey.systemsbiology.net/cmonkey/cMonkey_", 
+                vers, ".tar.gz\", \n\t\t\"cMonkey_", vers, ".tar.gz\" )\n> install.packages( \"cMonkey_", 
+                vers, ".tar.gz\", repos=NULL )\n\nOr by following the instructions on the cMonkey website, http://cmonkey.systemsbiology.net.")
+        else packageStartupMessage("Congratulations! You are using the latest version of cMonkey.\n")
     }
-  }
-
+    else {
+        packageStartupMessage("Could not check to see if you are using the latest version of cMonkey.")
+    }
+}
 DEBUG <-
 function (...) 
 {
@@ -25,8 +34,11 @@ adjust.all.clusters <-
 function (env, ks = 1:env$k.clust, force.motif = T, ...) 
 {
     old.stats <- env$stats
+    tmp <- env$row.col.membership.from.clusterStack(env$clusterStack)
+    row.membership <- tmp$r
+    col.membership <- tmp$c
     mc <- env$get.parallel(length(ks))
-    new.rm <- mc$apply(ks, function(k) env$adjust.clust(k, env$row.membership, 
+    new.rm <- mc$apply(ks, function(k) env$adjust.clust(k, row.membership, 
         ...)$r)
     rm <- do.call(cbind, new.rm)
     for (i in 1:nrow(rm)) {
@@ -35,14 +47,13 @@ function (env, ks = 1:env$k.clust, force.motif = T, ...)
     }
     rm <- rm[, apply(rm, 2, sum) != 0, drop = F]
     colnames(rm) <- NULL
-    if (any(dim(env$row.membership) != dim(rm)) || any(env$row.membership != 
-        rm)) {
-        env$row.membership <- rm
-        attr(env$clusterStack, "iter") <- NULL
-        env$cmonkey.one.iter(env, dont.update = T, force.row = T, 
-            force.col = T, force.motif = if (force.motif & !no.genome.info) 
-                "run.meme", force.net = T)
-    }
+    env$clusterStack <- lapply(1:env$k.clust, function(k) list(rows = rownames(which(rm == 
+        k, arr.ind = T)), cols = env$clusterStack[[k]]$cols))
+    env$clusterStack <- env$get.clusterStack(ks = 1:k.clust)
+    env$post.adjust <- FALSE
+    env$cmonkey.one.iter(env, dont.update = T, force.row = T, 
+        force.col = T, force.motif = if (force.motif & !no.genome.info) 
+            "run.meme", force.net = T)
     print(rbind(OLD = old.stats[nrow(old.stats), ], NEW = env$stats[nrow(env$stats), 
         ]))
     invisible(env)
@@ -51,15 +62,22 @@ adjust.clust <-
 function (k, row.memb = get("row.membership"), expand.only = T, 
     limit = 100, scores = "r.scores", quant.cutoff = 0.33, force.expand = 0) 
 {
-    if (scores == "rr.scores") {
-        if (!exists("rr.scores")) 
+    if (scores == "rr.scores" || scores == "r.scores") {
+        tmp <- get.combined.scores(quantile.normalize = T)
+        r.scores <- tmp$r
+        if (scores == "rr.scores") {
             scores <- get.density.scores(ks = 1:k.clust)$r
-        else scores <- get(scores)
-        scores <- 1 - scores[, ]
+            scores <- 1 - scores[, ]
+        }
+        else {
+            scores <- r.scores
+        }
+        rm(r.scores)
     }
     else {
         scores <- get(scores)
     }
+    get.rows2 <- function(k, rm) rownames(which(rm == k, arr.ind = T))
     scores <- scores[, ]
     old.rows <- get.rows(k)
     if (force.expand == 0) {
@@ -82,7 +100,7 @@ function (k, row.memb = get("row.membership"), expand.only = T,
     while (length(wh) > 0 && tries < 50) {
         wh2 <- names(which.max(scores[wh, k]))
         wh2.scores <- scores[wh2, row.memb[wh2, ]]
-        wh2a <- names(which.max(scores[get.rows(k, rm = row.memb), 
+        wh2a <- names(which.max(scores[get.rows2(k, rm = row.memb), 
             k]))
         for (col in 1:ncol(row.memb)) if (all(row.memb[wh2, col] == 
             0)) 
@@ -97,20 +115,20 @@ function (k, row.memb = get("row.membership"), expand.only = T,
             row.memb[wh2a, row.memb[wh2a, ] == k] <- 0
         if (force.expand == 0) {
             wh <- names(which(scores[which(!attr(ratios, "rnames") %in% 
-                get.rows(k, rm = row.memb)), k] < quantile(scores[get.rows(k, 
+                get.rows2(k, rm = row.memb)), k] < quantile(scores[get.rows2(k, 
                 rm = row.memb), k], quant.cutoff, na.rm = T)))
         }
         else {
             wh <- wh[!wh %in% wh2]
         }
-        if (length(get.rows(k, rm = row.memb)) > cluster.rows.allowed[2]) 
+        if (length(get.rows2(k, rm = row.memb)) > cluster.rows.allowed[2]) 
             break
         tries <- tries + 1
     }
-    new.rows <- get.rows(k, rm = row.memb)
+    new.rows <- get.rows2(k, rm = row.memb)
     if (any(!new.rows %in% old.rows) || any(!old.rows %in% new.rows)) 
         cat("ADJUSTED CLUSTER:", k, length(old.rows), length(new.rows), 
-            "\n")
+            sum(!old.rows %in% new.rows), "\n")
     row.memb <- t(apply(row.memb, 1, function(i) c(i[i != 0], 
         i[i == 0])))
     row.memb <- row.memb[, apply(row.memb, 2, sum) != 0, drop = F]
@@ -129,13 +147,16 @@ function (k, mot.inds = "COMBINED")
         return(list(p.clusts = NA, e.vals = NA))
     rows <- get.rows(k)
     p.clusts <- sapply(inds, function(n) {
-        pvs <- meme.scores[[n]]$all.pv
-        if (is.null(pvs)) 
-            return(NA)
-        rows <- rows[rows %in% rownames(pvs)]
-        if (length(rows) > 0) 
-            mean(log10(pvs[rows, k]), na.rm = T)
-        else NA
+        ms <- meme.scores[[n]][[k]]
+        out <- NA
+        if (length(rows) > 0 && !is.null(ms$pv.ev) && !is.null(ms$pv.ev[[1]])) {
+            if ("p.value" %in% colnames(ms$pv.ev[[1]])) 
+                out <- mean(log10(ms$pv.ev[[1]][rownames(ms$pv.ev[[1]]) %in% 
+                  rows, "p.value"]), na.rm = T)
+            else if ("pvals" %in% colnames(ms$pv.ev[[1]])) 
+                out <- mean(log10(ms$pv.ev[[1]][rownames(ms$pv.ev[[1]]) %in% 
+                  rows, "pvals"]), na.rm = T)
+        }
     })
     e.vals <- sapply(inds, function(n) {
         ms <- meme.scores[[n]][[k]]
@@ -187,12 +208,9 @@ function (k, rats.inds = "COMBINED", varNorm = F, in.cols = T,
         d.rows <- rowMeans(rats, na.rm = T)
         d.cols <- colMeans(rats, na.rm = T)
         d.all <- mean(d.rows, na.rm = T)
-        rij <- rats + d.all
-        rij[, ] <- rij[, ] - matrix(d.cols, nrow = nrow(rij), 
-            ncol = ncol(rij), byrow = T)
-        rij[, ] <- rij[, ] - matrix(d.rows, nrow = nrow(rij), 
-            ncol = ncol(rij), byrow = F)
-        average.r <- mean(abs(rij), na.rm = TRUE)
+        rats[, ] <- rats[, ] + d.all - outer(d.rows, d.cols, 
+            "+")
+        average.r <- mean(abs(rats), na.rm = TRUE)
         if (varNorm && !is.null(maxRowVar)) {
             row.var <- mean(apply(rats, 1, var, use = "pairwise.complete.obs"), 
                 na.rm = T)
@@ -205,12 +223,13 @@ function (k, rats.inds = "COMBINED", varNorm = F, in.cols = T,
     inds <- rats.inds
     if (rats.inds[1] == "COMBINED") 
         inds <- names(get("row.weights"))
+    rows <- get.rows(k)
+    cols <- get.cols(k)
     resids <- sapply(ratios[inds], function(rn) {
         if (in.cols) 
-            residual.submatrix(rn, get.rows(k), get.cols(k), 
-                varNorm = varNorm)
+            residual.submatrix(rn, rows, cols, varNorm = varNorm)
         else residual.submatrix(rn, get.rows(k), colnames(rn)[!colnames(rn) %in% 
-            get.cols(k)], varNorm = varNorm)
+            cols], varNorm = varNorm)
     })
     if (rats.inds[1] == "COMBINED") 
         resids <- weighted.mean(resids, row.weights[inds], na.rm = T)
@@ -239,26 +258,25 @@ function (e.cutoff = 0.01, nrow.cutoff = 5, seq.type = names(mot.weights)[1],
         sapply(1:k.clust, function(k) mean(net.scores[get.rows(k), 
             k], na.rm = T, trim = 0.01)) * net.scaling[iter]
     else 0
-    nrow <- tabulate(unlist(apply(row.membership, 1, unique)), 
-        k.clust)
+    nrow <- sapply(1:k.clust, function(k) length(get.rows(k)))
     out <- data.frame(k = 1:k.clust, nrow = nrow, score = score, 
         resid = sapply(1:k.clust, cluster.resid, varNorm = F), 
         consensus1 = sapply(1:k.clust, function(k) if (is.null(ms) || 
-            length(ms[[k]]) <= 3) 
+            is.null(ms[[k]]$meme.out) || length(ms[[k]]) <= 3) 
             ""
         else pssm.to.string(ms[[k]]$meme.out[[1]]$pssm)), e.value1 = sapply(1:k.clust, 
-            function(k) if (is.null(ms) || length(ms[[k]]) <= 
-                3) 
+            function(k) if (is.null(ms) || is.null(ms[[k]]$meme.out) || 
+                length(ms[[k]]) <= 3) 
                 Inf
             else ms[[k]]$meme.out[[1]]$e.value), consensus2 = sapply(1:k.clust, 
-            function(k) if (is.null(ms) || length(ms[[k]]) <= 
-                3) 
+            function(k) if (is.null(ms) || is.null(ms[[k]]$meme.out) || 
+                length(ms[[k]]) <= 3) 
                 ""
             else if (length(ms[[k]]$meme.out) == 1) 
                 ""
             else pssm.to.string(ms[[k]]$meme.out[[2]]$pssm)), 
         e.value2 = sapply(1:k.clust, function(k) if (is.null(ms) || 
-            length(ms[[k]]) <= 3) 
+            is.null(ms[[k]]$meme.out) || length(ms[[k]]) <= 3) 
             Inf
         else if (length(ms[[k]]$meme.out) <= 1) 
             Inf
@@ -270,7 +288,7 @@ function (e.cutoff = 0.01, nrow.cutoff = 5, seq.type = names(mot.weights)[1],
     out
 }
 clusters.w.conds <-
-function (conds, ks = 1:k.clust, p.val = F) 
+function (conds, ks = 1:k.clust, p.value = F) 
 {
     mc <- get.parallel(length(ks))
     unlist(mc$apply(ks, function(i) {
@@ -278,16 +296,16 @@ function (conds, ks = 1:k.clust, p.val = F)
         if (!p.val) 
             sum(cols %in% conds)
         else phyper(sum(cols %in% conds), length(conds), attr(ratios, 
-            "ncol") - length(conds), length(cols), lower = F) * 
+            "ncol") - length(conds), length(cols), lower.tail = F) * 
             length(ks)
     }))
 }
 clusters.w.func <-
-function (func, ks = 1:k.clust, short = F, max.rows = 999, p.val = F) 
+function (func, ks = 1:k.clust, shorter = F, max.rows = 999, p.value = F) 
 {
     if (p.val) {
         long.names <- get.long.names(attr(ratios, "rnames"), 
-            short = short)
+            shorter = short)
         n2 <- length(grep(func, long.names, perl = T, ignore.case = T))
     }
     mc <- get.parallel(length(ks))
@@ -295,7 +313,7 @@ function (func, ks = 1:k.clust, short = F, max.rows = 999, p.val = F)
         rows <- get.rows(i)
         if (length(rows) <= 1) 
             return(NA)
-        rows.l <- get.long.names(rows, short = short)
+        rows.l <- get.long.names(rows, shorter = short)
         if (!p.val) {
             if (length(rows) >= max.rows) 
                 NA
@@ -304,12 +322,12 @@ function (func, ks = 1:k.clust, short = F, max.rows = 999, p.val = F)
         else {
             phyper(length(grep(func, rows.l, perl = T, ignore.case = T)), 
                 n2, attr(ratios, "nrow") - n2, length(rows), 
-                lower = F) * length(ks)
+                lower.tail = F) * length(ks)
         }
     }))
 }
 clusters.w.genes <-
-function (genes, ks = 1:k.clust, p.val = F) 
+function (genes, ks = 1:k.clust, p.value = F) 
 {
     mc <- get.parallel(length(ks))
     unlist(mc$apply(ks, function(i) {
@@ -319,12 +337,12 @@ function (genes, ks = 1:k.clust, p.val = F)
         if (!p.val) 
             sum(rows %in% genes)
         else phyper(sum(rows %in% genes), length(genes), attr(ratios, 
-            "nrow") - length(genes), length(rows), lower = F) * 
+            "nrow") - length(genes), length(rows), lower.tail = F) * 
             length(ks)
     }))
 }
 cm.version <-
-"4.8.5"
+"4.9.2"
 cmonkey <-
 function (env = NULL, ...) 
 {
@@ -340,10 +358,8 @@ function (env = NULL, ...)
             sink(env$save.logfile, split = T, append = T)
     }
     cat("\033[31mTIME STARTED:", env$time.started, "\033[0m\n")
-    if ((!exists("row.membership", envir = env) || all(env$row.membership == 
-        0) || nrow(env$row.membership) != attr(env$ratios, "nrow") || 
-        nrow(env$col.membership) != attr(env$ratios, "ncol")) && 
-        exists("ratios", envir = env)) 
+    if ((!exists("clusterStack", envir = env) || length(env$clusterStack) < 
+        env$k.clust) && exists("ratios", envir = env)) 
         env$cmonkey.re.seed(env)
     while (env$iter <= env$n.iter) {
         iter <- env$iter
@@ -354,11 +370,6 @@ function (env = NULL, ...)
         try(env$plotStats(iter, plot.clust = env$favorite.cluster()))
     env$iter <- iter <- env$iter - 1
     print(env$cluster.summary())
-    if (env$post.adjust == TRUE) {
-        env$pre.adjusted.row.membership <- env$row.membership
-        env$adjust.all.clusters(env, expand.only = F)
-        gc()
-    }
     parent.env(env) <- globalenv()
     parent.env(env$cmonkey.params) <- env
     env$clusterStack <- env$get.clusterStack(ks = 1:env$k.clust, 
@@ -384,11 +395,11 @@ function (env = NULL, ...)
     }
     for (i in ls(tmp.e)) {
         f2 <- NULL
-        if ((!is.null(env) && exists(i, envir = env, inherit = F))) {
+        if ((!is.null(env) && exists(i, envir = env, inherits = F))) {
             f <- try(get(i, envir = env))
             f2 <- try(get(i, envir = tmp.e))
         }
-        else if (exists(i, envir = .GlobalEnv, inherit = F)) {
+        else if (exists(i, envir = .GlobalEnv, inherits = F)) {
             f <- try(get(i, envir = .GlobalEnv))
             f2 <- try(get(i, envir = tmp.e))
         }
@@ -415,7 +426,7 @@ function (env = NULL, ...)
     rm(f, f2, tmp.e)
     if (!is.null(env)) 
         for (i in ls(env)) assign(i, get(i, env))
-    args <- mget(names(formals()), env = as.environment(-1))
+    args <- mget(names(formals()), envir = as.environment(-1))
     for (i in names(args)) if (!i %in% c("...", "env")) 
         set.param(i, args[[i]])
     for (i in names(list(...))) if (i != "env") 
@@ -453,14 +464,25 @@ function (env = NULL, ...)
             colnames))))
         attr(ratios, "nrow") <- length(attr(ratios, "rnames"))
         attr(ratios, "ncol") <- length(attr(ratios, "cnames"))
+        if (is.null(names(ratios))) {
+            names(ratios) <- paste("ratios", 1:length(ratios), 
+                sep = ".")
+            if (exists("row.weights") && !all(names(ratios) %in% 
+                names(row.weights))) 
+                for (i in names(ratios)) row.weights[i] <- row.weights[1]
+        }
         for (n in names(ratios)) {
-            attr(ratios[[n]], "maxRowVar") <- mean(apply(ratios[[n]][, 
-                ], 1, var, use = "pair"), na.rm = T)
-            attr(ratios[[n]], "all.colVars") <- apply(ratios[[n]][, 
-                ], 2, var, use = "pair", na.rm = T)
+            if (ncol(ratios[[n]]) > 1) {
+                attr(ratios[[n]], "maxRowVar") <- mean(apply(ratios[[n]][, 
+                  ], 1, var, use = "pair"), na.rm = T)
+                attr(ratios[[n]], "all.colVars") <- apply(ratios[[n]][, 
+                  ], 2, var, use = "pair", na.rm = T)
+            }
         }
         rm(n)
     }
+    if (exists("ratios") && is.null(names(ratios))) 
+        names(ratios) <- paste("ratios", 1:length(ratios), sep = ".")
     if (!is.null(env) && exists("ratios")) 
         assign("ratios", ratios, envir = env)
     set.param("cog.org", "?")
@@ -479,12 +501,10 @@ function (env = NULL, ...)
     else round(k.clust * 2/3))
     set.param("row.iters", seq(1, n.iter, by = 2))
     set.param("col.iters", seq(1, n.iter, by = 5))
-    set.param("meme.iters", c(seq(600, 1200, by = 100), seq(1250, 
-        1500, by = 50), seq(1525, 1800, by = 25), seq(1810, max(n.iter, 
-        1820), by = 10)))
-    set.param("mot.iters", seq(601, max(n.iter, 605), by = 3))
+    set.param("meme.iters", seq(100, n.iter, by = 100))
+    set.param("mot.iters", seq(100, n.iter, by = 10))
     set.param("net.iters", seq(1, n.iter, by = 7))
-    set.param("row.scaling", 6)
+    set.param("row.scaling", 1)
     set.param("row.weights", c(ratios = 1))
     set.param("mot.scaling", seq(0, 1, length = n.iter * 3/4))
     set.param("mot.weights", c(`upstream meme` = 1))
@@ -498,35 +518,35 @@ function (env = NULL, ...)
     set.param("max.changes", c(rows = 0.5, cols = 5))
     set.param("cluster.rows.allowed", c(3, 70))
     set.param("merge.cutoffs", c(n = 0.3, cor = 0.975))
-    set.param("fuzzy.index", 0.7 * exp(-(1:n.iter)/(n.iter/3)) + 
-        0.05)
+    set.param("fuzzy.index", 0.75 * exp(-(1:n.iter)/(n.iter/4)))
     set.param("translation.tab", NULL)
     set.param("seed.method", c(rows = "kmeans", cols = "best"))
     set.param("maintain.seed", NULL)
-    set.param("n.motifs", c(rep(1, n.iter * 2/3), 2))
-    if (file.exists("./progs")) {
+    set.param("n.motifs", c(rep(1, n.iter/3), rep(2, n.iter/3)))
+    if (file.exists("./progs") && file.exists("./progs/meme")) {
         set.param("progs.dir", "./progs/")
     }
     else if ("package:cMonkey" %in% search() && file.exists(sprintf("%s/progs/", 
         system.file(package = "cMonkey")))) {
         set.param("progs.dir", sprintf("%s/progs/", system.file(package = "cMonkey")))
     }
-    else {
-        message("WARNING: You do not have meme/mast/dust installed.\nTrying to install it now.\n")
+    else if (any(mot.scaling > 0) && (!exists("no.genome.info") || 
+        !no.genome.info)) {
+        message("WARNING: You do not have meme/mast/dust installed in the correct location.\nTrying to install it now.\n")
         install.binaries()
         set.param("progs.dir", sprintf("%s/progs/", system.file(package = "cMonkey")))
         if ("package:cMonkey" %in% search() && !file.exists(sprintf("%s/progs/", 
             system.file(package = "cMonkey")))) 
             message("WARNING: Could not install meme. Please see the website for installation instructions.")
     }
-    set.param("meme.cmd", paste(progs.dir, "meme $fname -bfile $bgFname -psp $pspFname -time 600 -dna -revcomp -maxsize 9999999 -nmotifs %1$d -evt 1e9 -minw 6 -maxw 24 -mod zoops -nostatus -text -cons $none -pal=non", 
+    set.param("meme.cmd", paste(progs.dir, "meme $fname -bfile $bgFname -psp $pspFname -time 600 -dna -revcomp -maxsize 9999999 -nmotifs %1$d -evt 1e9 -minw 6 -maxw 24 -mod zoops -nostatus -text -cons $compute", 
         sep = "/"))
     set.param("mast.cmd", sprintf("%s/mast $memeOutFname -d $fname -bfile $bgFname -nostatus -stdout -text -brief -ev 99999 -mev 99999 -mt 0.99 -seqp -remcorr", 
         progs.dir))
     set.param("dust.cmd", sprintf("%s/dust $fname", progs.dir))
     set.param("operon.shift", TRUE)
     set.param("bg.order", 3)
-    set.param("recalc.bg", TRUE)
+    set.param("recalc.bg", FALSE)
     set.param("motif.upstream.search", c(-20, 150))
     set.param("motif.upstream.scan", c(-30, 250))
     set.param("rsat.urls", c("http://rsat.ccb.sickkids.ca/", 
@@ -558,15 +578,18 @@ function (env = NULL, ...)
     if (organism == "hsa") 
         rsat.urls[1] <- rsat.urls[2]
     if (!exists("rsat.species") || rsat.species == "?" || is.na(rsat.species)) {
-        err <- dlf("data/KEGG/KEGG_taxonomy.txt", "ftp://ftp.genome.jp/pub/kegg/genes/taxonomy")
+        err <- dlf("data/KEGG/KEGG_taxonomy.txt", "http://baliga.systemsbiology.net/cmonkey/taxonomy.txt")
         if (class(err) != "try-error") {
             tab <- read.delim("data/KEGG/KEGG_taxonomy.txt", 
-                sep = "\t", comment = "#", head = F, as.is = T)
+                sep = "\t", comment.char = "#", header = F, as.is = T)
             rsat.spec <- as.character(subset(tab, V2 == organism, 
                 select = "V4", drop = T))[1]
             rm(tab)
             if (any(strsplit(rsat.spec, "")[[1]] == "(")) 
                 rsat.spec <- gsub("\\s\\(.*\\)", "", rsat.spec)
+        }
+        else {
+            rsat.spec <- "?"
         }
         rsat.spec <- gsub(" ", "_", rsat.spec, fixed = T)
         kegg.spec <- rsat.spec
@@ -579,20 +602,20 @@ function (env = NULL, ...)
         vals <- character()
         if (file.exists("data/RSAT_genomes_listing.txt")) {
             tmp <- readLines("data/RSAT_genomes_listing.txt")
-            vals <- grep(rsat.spec, tmp, fixed = T, val = T)
+            vals <- grep(rsat.spec, tmp, fixed = T, value = T)
         }
         if (length(vals) <= 0) {
             message("Could not find correct organism for RSAT... will try to guess...")
             max.dist <- 0.5
             vals <- rep("", 3)
             while (length(vals) > 1) {
-                vals <- agrep(rsat.spec, tmp, ignore = T, max.dist = max.dist, 
-                  val = T)
+                vals <- agrep(rsat.spec, tmp, ignore.case = T, max.distance = max.dist, 
+                  value = T)
                 max.dist <- max.dist - 0.01
                 if (length(vals) <= 0) {
                   max.dist <- max.dist + 0.02
-                  vals <- agrep(rsat.spec, tmp, ignore = T, max.dist = max.dist, 
-                    val = T)
+                  vals <- agrep(rsat.spec, tmp, ignore.case = T, max.distance = max.dist, 
+                    value = T)
                   break
                 }
             }
@@ -618,7 +641,7 @@ function (env = NULL, ...)
     if (!exists("taxon.id") || taxon.id == "?" || is.na(taxon.id) || 
         length(taxon.id) <= 0) {
         fname <- dlf("data/GO/proteome2taxid", "ftp://ftp.ebi.ac.uk/pub/databases/GO/goa/proteomes/proteome2taxid")
-        tab <- read.delim(gzfile("data/GO/proteome2taxid"), head = F)
+        tab <- read.delim(gzfile("data/GO/proteome2taxid"), header = F)
         taxon.id <- subset(tab, V1 == gsub("_", " ", rsat.species))$V2
         if (length(taxon.id) <= 0) 
             taxon.id <- subset(tab, grepl(gsub("_", " ", rsat.species), 
@@ -716,6 +739,87 @@ function (env = NULL, ...)
             message("Organism is ", organism, " ", cog.org, " ", 
                 rsat.species, " ", taxon.id)
         }
+        if (exists("ratios") && !is.null(ratios)) 
+            tmp <- toupper(attr(ratios, "rnames"))
+        else if (exists("genome.info") && !is.null(genome.info$feature.names)) {
+            tmp <- toupper(subset(genome.info$feature.names, 
+                type == "primary", select = "names", drop = T))
+            if (exists("ratios") && !is.null(ratios)) 
+                tmp <- tmp[toupper(tmp) %in% toupper(attr(ratios, 
+                  "rnames"))]
+        }
+        qqq <- sapply(1:4, function(nch) max(table(substr(tmp, 
+            1, nch)))/length(tmp))
+        nch <- 0
+        if (any(qqq > 0.9)) {
+            nch <- which(qqq > 0.9)
+            nch <- nch[length(nch)]
+        }
+        else if (any(qqq > 0.6)) {
+            nch <- which(qqq > 0.6)
+            nch <- nch[length(nch)]
+        }
+        else if (any(qqq > 0.4)) {
+            nch <- which(qqq > 0.4)
+            nch <- nch[length(nch)]
+        }
+        prefix <- NA
+        if (nch > 0) {
+            prefix <- names(which.max(table(substr(tmp, 1, nch))))
+            message("Assuming gene/probe names have common prefix '", 
+                prefix, "'.")
+            genome.info$gene.prefix <- prefix
+        }
+        else {
+            message("Could not find a common gene/probe identifier prefix. This only matters if there's no expression matrix.")
+            prefix <- genome.info$gene.prefix <- NA
+        }
+        if (TRUE) {
+            tmp2 <- tmp
+            if (length(unique(nchar(tmp2))) > 1) {
+                nc <- max(nchar(tmp2))
+                for (i in 1:length(tmp2)) {
+                  tmp2[i] <- paste(tmp2[i], paste(rep(" ", nc - 
+                    nchar(tmp2[i])), sep = "", collapse = ""), 
+                    sep = "")
+                }
+            }
+            tmp2 <- do.call(rbind, strsplit(tmp2, ""))
+            regex <- apply(tmp2, 2, function(i) sort(unique(i)))
+            for (i in 1:length(regex)) {
+                ii <- as.integer(regex[[i]])
+                if (!any(is.na(ii))) {
+                  if (length(ii) == length(ii[1]:ii[length(ii)]) && 
+                    all(sort(ii) == ii[1]:ii[length(i)])) 
+                    regex[[i]] <- paste("[", paste(ii[1], ii[length(ii)], 
+                      sep = "-"), "]", sep = "")
+                }
+                if (length(regex[[i]][regex[[i]] != " "]) > 1) 
+                  regex[[i]] <- c("[", regex[[i]], "]")
+                if (any(regex[[i]] == "" | regex[[i]] == " " | 
+                  is.na(regex[[i]]))) 
+                  regex[[i]] <- c(regex[[i]][regex[[i]] != " "], 
+                    "?")
+            }
+            regex <- paste(unlist(lapply(regex, paste, sep = "", 
+                collapse = "")), sep = "", collapse = "")
+            regex <- gsub(".", "\\.", regex, fixed = T)
+            message("Assuming gene/probe names have regex '", 
+                regex, "'.")
+            genome.info$gene.regex <- regex
+        }
+        genome.info$all.gene.names <- unique(as.character(subset(genome.info$feature.names, 
+            grepl(paste("^", genome.info$gene.regex, sep = ""), 
+                names, ignore.case = T, perl = T), select = "names", 
+            drop = T)))
+        if (length(genome.info$all.gene.names)) {
+            genome.info$all.gene.names <- unique(as.character(subset(genome.info$feature.names, 
+                grepl(paste("^", genome.info$gene.prefix, sep = ""), 
+                  names, ignore.case = T, perl = T), select = "names", 
+                drop = T)))
+        }
+        if (!is.null(env)) 
+            assign("genome.info", genome.info, envir = env)
         genome.info$operons <- NULL
         if ((operon.shift || "operons" %in% names(net.weights)) && 
             !no.genome.info) {
@@ -738,46 +842,12 @@ function (env = NULL, ...)
             if (!is.null(env)) 
                 assign("genome.info", genome.info, envir = env)
         }
-        if (exists("genome.info") && !is.null(genome.info$feature.names) && 
-            (!exists("ratios") || is.null(ratios))) 
-            tmp <- toupper(subset(genome.info$feature.names, 
-                type == "primary", select = "names", drop = T))
-        else if (!no.genome.info) 
-            tmp <- toupper(subset(genome.info$feature.names, 
-                type == "primary" | names %in% attr(ratios, "rnames"), 
-                select = "names", drop = T))
-        else if (exists("ratios") && !is.null(ratios)) 
-            tmp <- toupper(attr(ratios, "rnames"))
-        qqq <- sapply(1:4, function(nch) max(table(substr(tmp, 
-            1, nch)))/length(tmp))
-        nch <- 0
-        if (any(qqq > 0.6)) {
-            nch <- which(qqq > 0.6)
-            nch <- nch[length(nch)]
-        }
-        else if (any(qqq > 0.4)) {
-            nch <- which(qqq > 0.4)
-            nch <- nch[length(nch)]
-        }
-        prefix <- NA
-        if (nch > 0) {
-            prefix <- names(which.max(table(substr(tmp, 1, nch))))
-            message("Assuming gene/probe names have common prefix '", 
-                prefix, "'.")
-            genome.info$gene.prefix <- prefix
-        }
-        else {
-            message("Could not find a common gene/probe identifier prefix. This only matters if there's no expression matrix.")
-            prefix <- genome.info$gene.prefix <- NA
-        }
-        if (!is.null(env)) 
-            assign("genome.info", genome.info, envir = env)
         if (!exists("ratios") || is.null(ratios)) {
             message("WARNING: No ratios matrix -- will generate an 'empty' one with all annotated ORFs for 'probes'.")
-            if (!is.na(prefix)) 
+            if (!is.null(genome.info$gene.regex)) 
                 rows <- unique(as.character(subset(genome.info$feature.names, 
-                  grepl(paste("^", prefix, sep = ""), names, 
-                    ignore = T, perl = T), select = "names", 
+                  grepl(paste("^", genome.info$gene.regex, sep = ""), 
+                    names, ignore.case = T, perl = T), select = "names", 
                   drop = T)))
             else rows <- unique(as.character(subset(genome.info$feature.names, 
                 type == "primary", select = "names", drop = T)))
@@ -789,15 +859,15 @@ function (env = NULL, ...)
             attr(ratios, "ncol") <- 1
             cat("Ratios: ", attr(ratios, "nrow"), "x", 1, "\n")
         }
-        rm(nch, prefix, tmp, qqq)
-        if (!is.null(genome.info$genome.seqs)) {
+        rm(nch, prefix, regex, tmp, qqq)
+        if (!no.genome.info && length(mot.weights) > 0) {
             genome.info$all.upstream.seqs <- genome.info$bg.list <- list()
             genome.info$bg.fname <- character()
             for (i in names(mot.weights)) {
                 cat("Pre-computing all '", i, "' seqs (", paste(motif.upstream.scan[[i]], 
                   collapse = ", "), ")...\n", sep = "")
-                genome.info$all.upstream.seqs[[i]] <- get.sequences(attr(ratios, 
-                  "rnames"), seq.type = i, distance = motif.upstream.scan[[i]], 
+                genome.info$all.upstream.seqs[[i]] <- get.sequences(genome.info$all.gene.names, 
+                  seq.type = i, distance = motif.upstream.scan[[i]], 
                   filter = F)
                 if (!is.null(env)) 
                   assign("genome.info", genome.info, envir = env)
@@ -808,13 +878,13 @@ function (env = NULL, ...)
                     bg.order[i], ")...\n", sep = "")
                   tmp.seqs <- if (!is.null(genome.info$all.upstream.seqs[[i]])) 
                     genome.info$all.upstream.seqs[[i]]
-                  else get.sequences(attr(ratios, "rnames"), 
+                  else get.sequences(genome.info$all.gene.names, 
                     distance = motif.upstream.search[[i]], seq.type = i, 
                     filter = F)
                   genome.info$bg.fname[i] <- my.tempfile("meme.tmp", 
-                    suf = ".bg")
+                    suffix = ".bg")
                   capture.output(genome.info$bg.list[[i]] <- mkBgFile(tmp.seqs, 
-                    order = bg.order[i], bgfname = genome.info$bg.fname[i], 
+                    order = bg.order[i], verbose = T, bgfname = genome.info$bg.fname[i], 
                     use.rev.comp = grepl("-revcomp", meme.cmd[i])))
                   rm(tmp.seqs)
                 }
@@ -836,13 +906,19 @@ function (env = NULL, ...)
                   else {
                     cat("Loading STRING network.\n")
                     string <- get.STRING.links(genome.info$org.id$V1[1])
+                  }
+                  if (!is.null(string) && nrow(string) > 0) {
                     cat("Read in", nrow(string), "STRING edges; weight =", 
                       net.weights["string"], "\n")
+                    string$combined_score <- string$combined_score/max(string$combined_score, 
+                      na.rm = T) * 1000
+                    string$combined_score <- 1000 * exp(string$combined_score/1000)/exp(1)
+                    networks[["string"]] <- string
                   }
-                  string$combined_score <- string$combined_score/max(string$combined_score, 
-                    na.rm = T) * 1000
-                  string$combined_score <- 1000 * exp(string$combined_score/1000)/exp(1)
-                  networks[["string"]] <- string
+                  else {
+                    warning("Could not load STRING network. Either", 
+                      organism, "is not there or your gene names are not standard.")
+                  }
                   rm(string)
                 }
             }
@@ -866,10 +942,12 @@ function (env = NULL, ...)
                     data.frame(protein1 = tmp.sif[, 1], protein2 = tmp.sif[, 
                       2], combined_score = rep(1000, nrow(tmp.sif)))
                   }))
-                out.sif$combined_score <- rep(1000, nrow(out.sif))
-                colnames(out.sif) <- c("protein1", "protein2", 
-                  "combined_score")
-                networks[["operons"]] <- out.sif
+                if (!is.null(out.sif) && nrow(out.sif) > 0) {
+                  out.sif$combined_score <- rep(1000, nrow(out.sif))
+                  colnames(out.sif) <- c("protein1", "protein2", 
+                    "combined_score")
+                  networks[["operons"]] <- out.sif
+                }
                 rm(tmp, mc, out.sif)
             }
             if (!is.null(env)) 
@@ -996,7 +1074,7 @@ function (env = NULL, ...)
                   if (length(dupe.nodes) < 6000) {
                     tmp <- tapply(tmp.nn$combined_score, tmp.nn[, 
                       c("protein1", "protein2")], sum, na.rm = T)
-                    tmp2 <- which(!is.na(tmp), arr = T)
+                    tmp2 <- which(!is.na(tmp), arr.ind = T)
                     nn.new <- data.frame(protein1 = rownames(tmp)[tmp2[, 
                       1]], protein2 = colnames(tmp)[tmp2[, 2]], 
                       combined_score = tmp[tmp2])
@@ -1098,15 +1176,16 @@ function (env = NULL, ...)
                 names(net.weights) <- basename(names(net.weights))
         }
         if (!no.genome.info && cog.org != "" && cog.org != "?" && 
-            !is.null(cog.org)) {
+            !is.null(cog.org) && all(is.na(plot.iters) | plot.iters == 
+            0)) {
             cat("Loading COG functional codes (for plotting), org. code", 
                 cog.org, ": trying NCBI whog file...\n")
             genome.info$cog.code <- get.COG.code(cog.org)
+            cat(sum(!is.na(genome.info$cog.code)), "genes have a COG code (", 
+                if (is.null(genome.info$cog.code)) 
+                  attr(ratios, "nrow")
+                else sum(is.na(genome.info$cog.code)), "do not)\n")
         }
-        cat(sum(!is.na(genome.info$cog.code)), "genes have a COG code (", 
-            if (is.null(genome.info$cog.code)) 
-                attr(ratios, "nrow")
-            else sum(is.na(genome.info$cog.code)), "do not)\n")
     }
     iter <- 0
     meme.scores <- clusterStack <- list()
@@ -1114,11 +1193,11 @@ function (env = NULL, ...)
         meme.scores[[i]] <- list()
         meme.scores[[i]][[k.clust + 1]] <- ""
     }
-    stats <- row.scores <- col.scores <- mot.scores <- net.scores <- r.scores <- NULL
-    old.row.membership <- old.col.membership <- r.scores <- NULL
+    stats <- row.scores <- col.scores <- mot.scores <- net.scores <- NULL
     if (!exists("favorite.cluster")) 
-        favorite.cluster <- function() min(which(tabulate(row.membership) > 
-            cluster.rows.allowed[1] * 2))
+        favorite.cluster <- function() min(which(sapply(1:k.clust, 
+            function(k) length(get.rows(k))) > cluster.rows.allowed[1] * 
+            2))
     row.scaling <- extend.vec(row.scaling)
     mot.scaling <- extend.vec(mot.scaling)
     net.scaling <- extend.vec(net.scaling)
@@ -1153,123 +1232,49 @@ function (env = NULL, ...)
 cmonkey.one.iter <-
 function (env, dont.update = F, ...) 
 {
-    if (!exists("row.memb", envir = env)) {
-        env$row.memb <- t(apply(row.membership[], 1, function(i) 1:k.clust %in% 
-            i))
-        env$col.memb <- t(apply(col.membership[], 1, function(i) 1:k.clust %in% 
-            i))
-        env$row.memb <- matrix.reference(env$row.memb, backingfile = "row.memb", 
-            backingpath = env$cmonkey.filename)
-        env$col.memb <- matrix.reference(env$col.memb, backingfile = "col.memb", 
-            backingpath = env$cmonkey.filename)
-    }
-    else {
-        env$row.memb[, ] <- t(apply(row.membership[], 1, function(i) 1:k.clust %in% 
-            i))
-        env$col.memb[, ] <- t(apply(col.membership[], 1, function(i) 1:k.clust %in% 
-            i))
-    }
-    tmp <- get.all.scores(...)
-    env$row.scores <- tmp$r
-    env$mot.scores <- tmp$m
-    env$net.scores <- tmp$n
-    env$col.scores <- tmp$c
-    env$meme.scores <- tmp$ms
-    if (!is.null(tmp$cns)) 
-        env$cluster.net.scores <- tmp$cns
-    tmp <- get.combined.scores(quant = T)
-    env$r.scores <- tmp$r
-    env$c.scores <- tmp$c
-    env$n.scores <- tmp$n
-    env$m.scores <- tmp$m
-    if (!is.null(env$row.scores)) 
-        attr(env$row.scores, "changed") <- FALSE
-    if (!is.null(env$col.scores)) 
-        attr(env$col.scores, "changed") <- FALSE
-    if (!is.null(env$mot.scores)) 
-        attr(env$mot.scores, "changed") <- FALSE
-    if (!is.null(env$net.scores)) 
-        attr(env$net.scores, "changed") <- FALSE
-    if (length(tmp$scalings) > 0) {
-        env$row.scaling[iter] <- tmp$scalings["row"]
-        env$mot.scaling[iter] <- tmp$scalings["mot"]
-        env$net.scaling[iter] <- tmp$scalings["net"]
-    }
-    if (fuzzy.index[iter] > 1e-05) {
-        env$r.scores[, ] <- env$r.scores[, ] + rnorm(length(env$r.scores[, 
-            ]), sd = sd(env$r.scores[, ][row.memb[, ] == 1], 
-            na.rm = T) * fuzzy.index[iter])
-        if (!is.null(env$c.scores)) 
-            env$c.scores[, ] <- env$c.scores[, ] + rnorm(length(env$c.scores[, 
-                ]), sd = sd(env$c.scores[, ][col.memb[, ] == 
-                1], na.rm = T) * fuzzy.index[iter])
-    }
-    tmp <- get.density.scores(ks = 1:k.clust)
-    env$rr.scores <- tmp$r
-    env$cc.scores <- tmp$c
+    env <- env$update.all.clusters(env, dont.update = F, ...)
+    row.memb <- sapply(1:k.clust, function(k) attr(ratios, "rnames") %in% 
+        get.rows(k))
+    if (is.vector(row.memb)) 
+        row.memb <- t(row.memb)
+    rownames(row.memb) <- attr(ratios, "rnames")
+    col.memb <- sapply(1:k.clust, function(k) attr(ratios, "cnames") %in% 
+        get.cols(k))
+    if (is.vector(col.memb)) 
+        col.memb <- t(col.memb)
+    rownames(col.memb) <- attr(ratios, "cnames")
     if (iter %in% stats.iters) {
-        env$clusterStack <- get.clusterStack(ks = 1:k.clust)
-        env$stats <- rbind(stats, get.stats())
-        cat(organism, as.matrix(stats[nrow(stats), ]), "\n")
+        env$stats <- rbind(env$stats, env$get.stats())
+        cat(organism, as.matrix(env$stats[nrow(env$stats), ]), 
+            "\n")
     }
     else {
-        cat(sprintf("==> %04d %.3f %.3f %.3f\n", iter, mean(row.scores[, 
-            ][row.memb[, ] == 1], na.rm = T), if (!is.null(mot.scores)) 
-            mean(mot.scores[, ][row.memb[, ] == 1 & mot.scores[, 
+        cat(sprintf("==> %04d %.3f %.3f %.3f\n", iter, mean(env$row.scores[, 
+            ][row.memb], na.rm = T), if (!is.null(env$mot.scores)) 
+            mean(env$mot.scores[, ][row.memb & env$mot.scores[, 
                 ] < 0], na.rm = T, trim = 0.05)
-        else NA, if (!is.null(net.scores)) 
-            mean(net.scores[, ][row.memb[, ] == 1], na.rm = T, 
-                trim = 0.05)
+        else NA, if (!is.null(env$net.scores)) 
+            mean(env$net.scores[, ][row.memb], na.rm = T, trim = 0.05)
         else NA))
     }
-    size.compensation.func.rows <- function(n) exp(-n/(attr(ratios, 
-        "nrow") * n.clust.per.row/k.clust))
-    size.compensation.func.cols <- function(n) exp(-n/(attr(ratios, 
-        "ncol") * n.clust.per.col/k.clust))
-    for (k in 1:k.clust) {
-        tmp <- sum(row.memb[, k])
-        if (tmp > 0) 
-            env$rr.scores[, k] <- env$rr.scores[, k] * size.compensation.func.rows(tmp)
-        else env$rr.scores[, k] <- env$rr.scores[, k] * size.compensation.func.rows(cluster.rows.allowed[1])
-        if (!is.null(env$cc.scores)) {
-            tmp <- sum(col.memb[, k])
-            if (tmp > 0) 
-                env$cc.scores[, k] <- env$cc.scores[, k] * size.compensation.func.cols(tmp)
-            else env$cc.scores[, k] <- env$cc.scores[, k] * size.compensation.func.cols(attr(ratios, 
-                "ncol")/10)
-        }
+    if (!is.na(plot.iters) && iter %in% plot.iters) {
+        env$plotStats(iter, plot.clust = env$favorite.cluster(), 
+            new.dev = T)
     }
-    if (!dont.update) {
-        if (exists("row.membership")) {
-            env$old.row.membership <- row.membership
-            env$old.col.membership <- col.membership
-        }
-        tmp <- get.updated.memberships()
-        env$row.membership <- tmp$r
-        env$col.membership <- tmp$c
-        if (!is.null(tmp)) {
-            env$row.membership <- tmp$r
-            env$col.membership <- tmp$c
-        }
-        if (!is.na(plot.iters) && iter %in% plot.iters) {
-            env$clusterStack <- get.clusterStack(ks = 1:k.clust)
-            try(plotStats(iter, plot.clust = env$favorite.cluster(), 
-                new.dev = T), silent = T)
-        }
-        if (exists("cm.func.each.iter")) 
-            try(cm.func.each.iter(), silent = T)
-        if (any(cm.script.each.iter != "")) {
-            for (f in cm.script.each.iter) {
-                if (file.exists(f) && file.info(f)$size > 1) {
-                  tmp <- readLines(f)
-                  if (all(substr(tmp, 1, 1) == "#")) 
-                    next
-                  if (tmp[1] != "## QUIET") 
-                    cat("Sourcing the script '", f, "' ...\n", 
-                      sep = "")
-                  try(source(f, echo = tmp[1] != "## QUIET", 
-                    local = T), silent = T)
-                }
+    if (exists("cm.func.each.iter")) 
+        try(cm.func.each.iter(), silent = T)
+    if (any(cm.script.each.iter != "")) {
+        for (f in cm.script.each.iter) {
+            if (file.exists(f) && file.info(f)$size > 1) {
+                tmp <- readLines(f)
+                if (all(substr(tmp, 1, 1) == "#")) 
+                  next
+                if (tmp[1] != "## QUIET") 
+                  cat("Sourcing the script '", f, "' ...\n", 
+                    sep = "")
+                try(source(f, echo = tmp[1] != "## QUIET", local = T), 
+                  silent = T)
+                rm(tmp)
             }
         }
     }
@@ -1322,9 +1327,9 @@ function (env)
         tmp <- env$seed.clusters(env$k.clust, seed.method = "rnd", 
             col.method = "rnd")
     }
-    env$row.membership <- tmp$row.membership
-    env$col.membership <- tmp$col.membership
-    rm(tmp)
+    env$clusterStack <- lapply(1:env$k.clust, function(k) list(rows = rownames(which(tmp$rm == 
+        k, arr.ind = T)), cols = rownames(which(tmp$cm == k, arr.ind = T))))
+    attr(env$clusterStack, "iter") <- env$iter - 1
     invisible(env)
 }
 col.let <-
@@ -1475,7 +1480,7 @@ function (org, rows = attr(ratios, "rnames"))
             next
         gn <- gn[!is.na(gn)]
         if (!all(gn %in% up.rows)) 
-            gn <- toupper(unlist(get.synonyms(gn, ignore = T)))
+            gn <- toupper(unlist(get.synonyms(gn, ignore.case = T)))
         if (sum(gn %in% up.rows) <= 0) 
             return(character())
         gn <- gn[gn %in% up.rows]
@@ -1490,6 +1495,29 @@ function (org, rows = attr(ratios, "rnames"))
     out
 }
 get.STRING.links <-
+function (org.id = genome.info$org.id$V1[1], detailed = T) 
+{
+    url <- sprintf("http://baliga.systemsbiology.net/cmonkey/data/STRING/%d_STRING.tsv.gz", 
+        org.id)
+    fname <- sprintf("data/%s/string_links.tab.gz", rsat.species)
+    if ((!file.exists(fname) || file.info(fname)$size <= 10)) {
+        err <- dlf(fname, url, paste("Fetching STRING protein links file", 
+            url, "\n"))
+    }
+    if (file.exists(fname) && file.info(fname)$size > 10) {
+        cat("Loading EMBL STRING interaction links from local file", 
+            fname, "\n")
+        string.links <- read.delim(gzfile(fname), sep = "\t", 
+            header = F)
+        colnames(string.links) <- c("protein1", "protein2", "combined_score")
+    }
+    else {
+        string.links <- get.string.links.NEW(org.id)
+    }
+    closeAllConnections()
+    invisible(string.links)
+}
+get.STRING.links.NEW <-
 function (org.id = genome.info$org.id$V1[1], all.genes = attr(ratios, 
     "rnames"), score = "score", min.score = 2, string.url = "http://string-db.org/") 
 {
@@ -1497,7 +1525,7 @@ function (org.id = genome.info$org.id$V1[1], all.genes = attr(ratios,
         org.id, ".tab", sep = ""))) {
         string.links <- read.delim(paste("data/", rsat.species, 
             "/string_links_FALSE_", org.id, ".tab", sep = ""), 
-            head = T, sep = " ")
+            header = T, sep = " ")
         string.links$protein1 <- gsub(paste(org.id, ".", sep = ""), 
             "", string.links$protein1)
         string.links$protein2 <- gsub(paste(org.id, ".", sep = ""), 
@@ -1507,8 +1535,10 @@ function (org.id = genome.info$org.id$V1[1], all.genes = attr(ratios,
     file <- sprintf("data/%s/string_links_%s.tab", rsat.species, 
         org.id)
     proc.string.df <- function(file) {
-        err <- try(tmp <- unique(read.delim(file, head = F, sep = "")))
+        err <- try(tmp <- unique(read.delim(file, header = F, sep = "")))
         if ("try-catch" %in% class(err)) 
+            return(NULL)
+        if (!exists("tmp") || nrow(tmp) <= 0) 
             return(NULL)
         tmp2 <- strsplit(as.character(tmp$V15), "[:|]", perl = T)
         tmp2a <- sapply(tmp2, function(i) which(i == score))
@@ -1535,11 +1565,11 @@ function (org.id = genome.info$org.id$V1[1], all.genes = attr(ratios,
         id.file <- tempfile()
         options(timeout = 300)
         for (i in seq(1, length(all.genes), by = 100)) {
-            ids <- paste(org.id, all.genes[i:min(i + 99, length(all.genes))], 
-                sep = ".")
+            ids <- all.genes[i:min(i + 99, length(all.genes))]
+            ids <- c(ids, paste(org.id, all.genes[i:min(i + 99, 
+                length(all.genes))], sep = "."))
             cat(i, "of", length(all.genes), "\n")
             if (org.id == 3702) {
-                ids <- all.genes[i:min(i + 99, length(all.genes))]
                 url <- paste(string.url, "api/tsv/resolveList?caller_identity=cMonkey&identifiers=", 
                   URLencode(paste(ids, collapse = "\r"), reserved = T), 
                   sep = "")
@@ -1550,11 +1580,11 @@ function (org.id = genome.info$org.id$V1[1], all.genes = attr(ratios,
             url <- paste(string.url, "api/psi-mi-tab/interactionsList?required_score=", 
                 min.score, "&caller_identity=cMonkey&network_graph=2&limit=99999&identifiers=", 
                 URLencode(paste(ids, collapse = "\r"), reserved = T), 
-                sep = "")
+                "&species=", org.id, sep = "")
             if (!file.exists(file)) 
                 dlf(file, url, mode = "wb", msg = "Fetching STRING protein links (piecewise)... this may take a while...", 
-                  quiet = T)
-            else dlf(file, url, mode = "ab", quiet = T)
+                  quiet = F)
+            else dlf(file, url, mode = "ab", quiet = F)
         }
         string.links <- proc.string.df(file)
         writeLines(unique(c(all.genes, tried)), sprintf("%s.tried", 
@@ -1564,10 +1594,16 @@ function (org.id = genome.info$org.id$V1[1], all.genes = attr(ratios,
     invisible(string.links)
 }
 get.all.scores <-
-function (ks = 1:k.clust, force.row = F, force.col = F, force.motif = F, 
-    force.net = F, quantile.normalize = T) 
+structure(function (ks = 1:k.clust, force.row = F, force.col = F, 
+    force.motif = F, force.net = F, quantile.normalize = F) 
 {
     mc <- get.parallel(length(ks))
+    if (is.null(row.scores)) {
+        row.scores <- matrix(0, nrow = attr(ratios, "nrow"), 
+            ncol = max(ks))
+        rownames(row.scores) <- attr(ratios, "rnames")
+        row.scores <- matrix.reference(row.scores)
+    }
     if (force.row || (row.scaling[iter] > 0 && !is.na(row.iters[1]) && 
         iter %in% row.iters)) {
         if (is.null(row.scores)) {
@@ -1577,6 +1613,9 @@ function (ks = 1:k.clust, force.row = F, force.col = F, force.motif = F,
             row.scores <- matrix.reference(row.scores)
         }
         else row.scores[, ks] <- 0
+        row.memb <- sapply(1:k.clust, function(k) attr(ratios, 
+            "rnames") %in% get.rows(k))
+        rownames(row.memb) <- attr(ratios, "rnames")
         for (i in names(ratios)) {
             if (row.weights[i] == 0 || is.na(row.weights[i])) 
                 next
@@ -1584,15 +1623,14 @@ function (ks = 1:k.clust, force.row = F, force.col = F, force.motif = F,
                 ratios = ratios[[i]]))
             tmp <- is.infinite(tmp.row) | is.na(tmp.row)
             if (any(tmp)) 
-                tmp.row[tmp] <- quantile(tmp.row[row.memb[, ][rownames(tmp.row), 
-                  ] == 1 & !tmp], 0.95)
+                tmp.row[tmp] <- quantile(tmp.row[row.memb[rownames(tmp.row), 
+                  ] & !tmp], 0.95)
             tmp <- rownames(row.scores)[rownames(row.scores) %in% 
                 rownames(tmp.row)]
             row.scores[tmp, ks] <- row.scores[tmp, ks] + tmp.row[tmp, 
                 ] * row.weights[i]
             rm(tmp.row, tmp)
         }
-        attr(row.scores, "changed") <- TRUE
     }
     if (n.clust.per.col < k.clust && (force.col || (row.scaling[iter] > 
         0 && !is.na(col.iters[1]) && iter %in% col.iters))) {
@@ -1603,6 +1641,9 @@ function (ks = 1:k.clust, force.row = F, force.col = F, force.motif = F,
             col.scores <- matrix.reference(col.scores)
         }
         else col.scores[, ks] <- 0
+        col.memb <- sapply(1:k.clust, function(k) attr(ratios, 
+            "cnames") %in% get.cols(k))
+        rownames(col.memb) <- attr(ratios, "cnames")
         for (i in names(row.weights)) {
             if (row.weights[i] == 0 || is.na(row.weights[i])) 
                 next
@@ -1618,7 +1659,6 @@ function (ks = 1:k.clust, force.row = F, force.col = F, force.motif = F,
                 ] * row.weights[i]
             rm(tmp.col, tmp)
         }
-        attr(col.scores, "changed") <- TRUE
     }
     for (i in names(mot.weights)) {
         if (force.motif == "run.meme" || (mot.scaling[iter] > 
@@ -1661,7 +1701,6 @@ function (ks = 1:k.clust, force.row = F, force.col = F, force.motif = F,
                 ks] + tmp.mots[[i]][, ] * mot.weights[i]
             rm(tmp.mots)
         }
-        attr(mot.scores, "changed") <- TRUE
     }
     cluster.ns <- NULL
     if (force.net || (net.scaling[iter] > 0 && !is.na(net.iters[1]) && 
@@ -1704,7 +1743,6 @@ function (ks = 1:k.clust, force.row = F, force.col = F, force.motif = F,
                 ks] + tmp.nets[[i]][, ] * net.weights[i]
             rm(tmp.nets)
         }
-        attr(net.scores, "changed") <- TRUE
         cluster.ns <- cbind(cluster.ns, do.call(c, mc$apply(ks, 
             function(k) mean(net.scores[get.rows(k), k], na.rm = T, 
                 trim = 0.05))))
@@ -1712,7 +1750,7 @@ function (ks = 1:k.clust, force.row = F, force.col = F, force.motif = F,
     }
     list(r = row.scores, m = mot.scores, ms = meme.scores, n = net.scores, 
         c = col.scores, cns = cluster.ns)
-}
+}, version = 1)
 get.clust <-
 function (k, fill = T, fill.motif = T, seq.type = names(mot.weights), 
     varNorm = F, ...) 
@@ -1724,7 +1762,7 @@ function (k, fill = T, fill.motif = T, seq.type = names(mot.weights),
             colNames <- colNames[colNames %in% attr(ratios, "cnames")]
         c.tmp <- list(nrows = length(rowNames), ncols = length(colNames), 
             rows = rowNames, cols = colNames, k = 999, p.clust = 1, 
-            e.val = rep(999, n.motifs), resid = {
+            e.value = rep(999, n.motifs), resid = {
                 out = rep(NA, length(row.weights))
                 names(out) <- names(row.weights)
                 resid = out
@@ -1805,14 +1843,13 @@ function (k, for.cols = "all", ratios = ratios[[1]], norm.method = c("mean",
         get.row.weights(rows, cols, ratios)
     else NA
     if (is.na(row.weights[1])) {
-        rats.mn <- matrix(colMeans(rats, na.rm = T), nrow = nrow(rats), 
-            ncol = ncol(rats), byrow = T)
+        rats.mn <- colMeans(rats, na.rm = T)
     }
     else {
-        rats.mn <- matrix(apply(rats, 2, weighted.mean, w = row.weights[rows], 
-            na.rm = T), ncol = ncol(rats), byrow = T)
+        rats.mn <- apply(rats, 2, weighted.mean, w = row.weights[rows], 
+            na.rm = T)
     }
-    rats[, ] <- (rats[, ] - rats.mn)^2
+    rats[, ] <- t(t(rats) - rats.mn)^2
     rats <- colMeans(rats, na.rm = T)
     var.norm <- 0.99
     if (norm.method == "all.colVars") {
@@ -1821,71 +1858,88 @@ function (k, for.cols = "all", ratios = ratios[[1]], norm.method = c("mean",
             var.norm <- all.colVars[for.cols]
     }
     else if (norm.method == "mean") {
-        var.norm <- abs(rats.mn[1, ])
+        var.norm <- abs(rats.mn)
     }
     rats <- rats/(var.norm + 0.01)
     rats
 }
 get.cols <-
-function (k, cm = get("col.membership")) 
+function (k) 
 {
-    out <- unique(rownames(which(cm[] == k, arr = T)))
-    if (is.null(out)) 
-        out <- character()
+    out <- clusterStack[[k]]$cols
+    if (is.null(out) || is.na(out) || length(out) <= 0) 
+        out <- attr(ratios, "cnames")
     out
 }
 get.combined.scores <-
 function (quantile.normalize = F) 
 {
-    if (!exists("r.scores") || is.null(r.scores)) {
-        r.scores <- row.scores[, ]
-        r.scores <- matrix.reference(r.scores)
+    r.scores <- row.scores[, ]
+    r.scores <- matrix.reference(r.scores)
+    if (!quantile.normalize) {
+        row.memb <- sapply(1:k.clust, function(k) attr(ratios, 
+            "rnames") %in% get.rows(k))
+        rownames(row.memb) <- attr(ratios, "rnames")
+        tmp <- r.scores[, ] < -20
+        r.scores[, ][tmp] <- min(r.scores[, ][!tmp], na.rm = T)
+        rsm <- r.scores[, ][row.memb]
+        tmp <- mad(rsm, na.rm = T)
+        if (tmp != 0) 
+            r.scores[, ] <- (r.scores[, ] - median(rsm, na.rm = T))/tmp
+        else {
+            tmp <- sd(rsm, na.rm = T)
+            if (tmp != 0) 
+                r.scores[, ] <- (r.scores[, ] - median(rsm, na.rm = T))/tmp
+        }
+        rm(tmp, rsm)
     }
-    r.scores[, ] <- row.scores[, ]
     tmp <- r.scores[, ] < -20
     r.scores[, ][tmp] <- min(r.scores[, ][!tmp], na.rm = T)
     rm(tmp)
     r.scores[, ][is.infinite(r.scores[, ])] <- NA
     r.scores[, ][is.na(r.scores[, ])] <- max(r.scores[, ], na.rm = T)
+    if (!quantile.normalize && !is.null(mot.scores) || !is.null(net.scores)) 
+        rs.quant <- quantile(r.scores[, ], 0.01, na.rm = T)
     if (!is.null(mot.scores)) {
-        if (!exists("m.scores") || is.null(m.scores)) {
-            m.scores <- mot.scores[, ]
-            m.scores <- matrix.reference(m.scores)
-        }
-        else m.scores[, ] <- mot.scores[, ]
+        m.scores <- mot.scores[, ]
     }
     else m.scores <- NULL
-    if (!is.null(mot.scores) && !is.null(m.scores) && (is.null(attr(mot.scores, 
-        "changed")) || attr(mot.scores, "changed") == TRUE)) {
+    if (!is.null(mot.scores) && !is.null(m.scores)) {
         tmp <- m.scores[, ] < -20
         m.scores[, ][tmp] <- min(m.scores[, ][!tmp], na.rm = T)
         rm(tmp)
+        if (!quantile.normalize) {
+            m.scores[, ] <- m.scores[, ] - quantile(m.scores[, 
+                ], 0.99, na.rm = T)
+            m.scores[, ] <- m.scores[, ]/abs(quantile(m.scores[, 
+                ], 0.01, na.rm = T)) * abs(rs.quant)
+        }
     }
     if (!is.null(net.scores)) {
-        if (!exists("n.scores") || is.null(n.scores)) {
-            n.scores <- net.scores[, ]
-            n.scores <- matrix.reference(n.scores)
-        }
-        else n.scores[, ] <- net.scores[, ]
+        n.scores <- net.scores[, ]
+        n.scores <- matrix.reference(n.scores)
     }
     else n.scores <- NULL
-    if (!is.null(net.scores) && !is.null(n.scores) && (is.null(attr(net.scores, 
-        "changed")) || attr(net.scores, "changed") == TRUE)) {
+    if (!is.null(net.scores) && !is.null(n.scores)) {
         n.scores[, ] <- n.scores[, ] - quantile(n.scores[, ], 
             0.99, na.rm = T)
+        if (!quantile.normalize) {
+            qqq <- abs(quantile(n.scores[, ], 0.01, na.rm = T))
+            if (qqq == 0) 
+                qqq <- sort(n.scores[, ])[10]
+            if (qqq == 0) 
+                qqq <- min(n.scores[, ], na.rm = T)
+            if (qqq != 0) 
+                n.scores[, ] <- n.scores[, ]/qqq * abs(rs.quant)
+            rm(qqq)
+        }
     }
     if (!is.null(col.scores)) {
-        if (!exists("c.scores") || is.null(c.scores)) {
-            c.scores <- col.scores[, ] * 0
-            c.scores <- matrix.reference(c.scores)
-        }
-        else c.scores[, ] <- col.scores[, ]
-        if (is.null(attr(col.scores, "changed")) || attr(col.scores, 
-            "changed") == TRUE) {
-            tmp <- c.scores[, ] < -20
-            c.scores[, ][tmp] <- min(c.scores[, ][!tmp], na.rm = T)
-            rm(tmp)
-        }
+        c.scores <- col.scores[, ] * 0
+        c.scores <- matrix.reference(c.scores)
+        tmp <- c.scores[, ] < -20
+        c.scores[, ][tmp] <- min(c.scores[, ][!tmp], na.rm = T)
+        rm(tmp)
     }
     else c.scores <- NULL
     new.weights <- c(row = row.scaling[iter], mot = mot.scaling[iter], 
@@ -1908,26 +1962,25 @@ function (quantile.normalize = F)
         r.scores[, ] <- r.scores[, ] * new.weights["row"]
     if (!is.null(m.scores)) {
         tmp <- !is.na(m.scores[, ])
+        if (is.null(r.scores)) 
+            r.scores <- m.scores[, ] * 0
         r.scores[, ][tmp] <- r.scores[, ][tmp] + m.scores[, ][tmp] * 
             new.weights["mot"]
     }
     if (!is.null(n.scores)) {
         tmp <- !is.na(n.scores[, ])
+        if (is.null(r.scores)) 
+            r.scores <- n.scores[, ] * 0
         r.scores[, ][tmp] <- r.scores[, ][tmp] + n.scores[, ][tmp] * 
             new.weights["net"]
     }
     r.scores <- matrix.reference(r.scores)
     c.scores <- matrix.reference(c.scores)
-    if (!is.null(n.scores)) 
-        n.scores <- matrix.reference(n.scores)
-    if (!is.null(m.scores)) 
-        m.scores <- matrix.reference(m.scores)
-    invisible(list(r = r.scores, c = c.scores, n = net.scores, 
-        m = mot.scores, scalings = new.weights))
+    invisible(list(r = r.scores, c = c.scores, scalings = new.weights))
 }
 get.density.scores <-
-function (ks = 1:k.clust, plot = "none", bw.scale = function(nr) exp(-nr/10) * 
-    10) 
+function (ks = 1:k.clust, r.scores, c.scores, plot = "none", 
+    bw.scale = function(nr) exp(-nr/10) * 10) 
 {
     rr <- attr(ratios, "rnames")
     rs <- r.scores
@@ -1959,14 +2012,14 @@ function (ks = 1:k.clust, plot = "none", bw.scale = function(nr) exp(-nr/10) *
         }
         return(p/sum(p, na.rm = T))
     }
-    if (!exists("rr.scores") || is.null(rr.scores) || any(dim(rr.scores) != 
-        dim(r.scores))) {
+    rr.scores <- NULL
+    mc <- get.parallel(length(ks))
+    if (!is.null(row.scores)) {
         rr.scores <- row.scores[, ] * 0
         rr.scores <- matrix.reference(rr.scores)
+        rr.scores[, ] <- do.call(cbind, mc$apply(ks, get.rr.scores))
+        rr.scores[, ][is.infinite(rr.scores[, ])] <- NA
     }
-    mc <- get.parallel(length(ks))
-    rr.scores[, ] <- do.call(cbind, mc$apply(ks, get.rr.scores))
-    rr.scores[, ][is.infinite(rr.scores[, ])] <- NA
     cc.scores <- NULL
     if (!is.null(col.scores)) {
         cs <- c.scores
@@ -2000,11 +2053,8 @@ function (ks = 1:k.clust, plot = "none", bw.scale = function(nr) exp(-nr/10) *
             }
             return(p/sum(p, na.rm = T))
         }
-        if (!exists("cc.scores") || is.null(cc.scores) || any(dim(cc.scores) != 
-            dim(c.scores))) {
-            cc.scores <- col.scores[, ] * 0
-            cc.scores <- matrix.reference(cc.scores)
-        }
+        cc.scores <- col.scores[, ] * 0
+        cc.scores <- matrix.reference(cc.scores)
         if (!is.null(c.scores)) {
             cc.scores[, ] <- do.call(cbind, mc$apply(ks, get.cc.scores))
             cc.scores[, ][is.infinite(cc.scores)] <- NA
@@ -2023,6 +2073,13 @@ get.gene.coords <-
 function (rows, op.shift = T, op.table = genome.info$operons, 
     ...) 
 {
+    if (is.null(rows)) {
+        if (organism != "hal") 
+            rows <- grep("^NP_", as.character(genome.info$feature.tab$id), 
+                perl = T, value = T)
+        else rows <- grep("^VNG", as.character(genome.info$feature.tab$canonical_Name), 
+            perl = T, value = T)
+    }
     rows <- unique(rows)
     syns <- get.synonyms(rows, ...)
     tab <- genome.info$feature.tab
@@ -2049,8 +2106,27 @@ function (rows, op.shift = T, op.table = genome.info$operons,
                 "start_pos", "end_pos")]
         }
         else if (attr(op.table, "source") == "microbes.online") {
-            ops <- merge(ids, op.table, by.x = "names", by.y = "gene", 
-                all.x = T)
+            ops <- NULL
+            if (!any(ids$names %in% op.table$gene)) {
+                ids2 <- lapply(syns, function(s) s[s %in% op.table$gene])
+                if (all(sapply(ids2, length) < 1)) {
+                  warning("Could not find operon info for any input genes", 
+                    call. = F)
+                }
+                else {
+                  if (any(sapply(ids2, length) < 1)) 
+                    warning("Could not find operon info for all input genes", 
+                      call. = F)
+                  ids2 <- ids2[sapply(ids2, length) >= 1]
+                  ids2 <- sapply(ids2, "[", 1)
+                  ids2 <- data.frame(id = ids2, names = names(ids2))
+                  ops <- merge(ids2, op.table, by.x = "id", by.y = "gene", 
+                    all.x = T)
+                }
+            }
+            if (is.null(ops)) 
+                ops <- merge(ids, op.table, by.x = "names", by.y = "gene", 
+                  all.x = T)
             if (any(is.na(ops$head))) {
                 head <- as.character(ops$head)
                 head[is.na(head)] <- as.character(ops$names[is.na(head)])
@@ -2081,8 +2157,77 @@ function (rows, op.shift = T, op.table = genome.info$operons,
         coos$end_pos <- as.numeric(levels(coos$end_pos))[coos$end_pos]
     coos[!duplicated(coos[, 1:4]), ]
 }
+get.gene.regex <-
+function (names = NULL) 
+{
+    if (!is.null(names)) 
+        tmp <- names
+    else {
+        if (exists("ratios") && !is.null(ratios)) 
+            tmp <- toupper(attr(ratios, "rnames"))
+        else if (exists("genome.info") && !is.null(genome.info$feature.names)) {
+            tmp <- toupper(subset(genome.info$feature.names, 
+                type == "primary", select = "names", drop = T))
+            if (exists("ratios") && !is.null(ratios)) 
+                tmp <- tmp[toupper(tmp) %in% toupper(attr(ratios, 
+                  "rnames"))]
+        }
+    }
+    qqq <- sapply(1:4, function(nch) max(table(substr(tmp, 1, 
+        nch)))/length(tmp))
+    nch <- 0
+    if (any(qqq > 0.9)) {
+        nch <- which(qqq > 0.9)
+        nch <- nch[length(nch)]
+    }
+    else if (any(qqq > 0.6)) {
+        nch <- which(qqq > 0.6)
+        nch <- nch[length(nch)]
+    }
+    else if (any(qqq > 0.4)) {
+        nch <- which(qqq > 0.4)
+        nch <- nch[length(nch)]
+    }
+    prefix <- NA
+    if (nch > 0) {
+        prefix <- names(which.max(table(substr(tmp, 1, nch))))
+        message("Assuming gene/probe names have common prefix '", 
+            prefix, "'.")
+        genome.info$gene.prefix <- prefix
+    }
+    else {
+        message("Could not find a common gene/probe identifier prefix. This only matters if there's no expression matrix.")
+        prefix <- genome.info$gene.prefix <- NA
+    }
+    tmp2 <- tmp
+    if (length(unique(nchar(tmp2))) > 1) {
+        nc <- max(nchar(tmp2))
+        for (i in 1:length(tmp2)) tmp2[i] <- paste(tmp2[i], rep(" ", 
+            nc - nchar(tmp2[i])), sep = "", collapse = "")
+    }
+    tmp2 <- do.call(rbind, strsplit(tmp2, ""))
+    regex <- apply(tmp2, 2, function(i) sort(unique(i)))
+    for (i in 1:length(regex)) {
+        ii <- as.integer(regex[[i]])
+        if (!any(is.na(ii))) {
+            if (length(ii) == length(ii[1]:ii[length(ii)]) && 
+                all(ii) == ii[1]:ii[length(i)]) 
+                regex[[i]] <- paste("[", paste(ii[1], ii[length(ii)], 
+                  sep = "-"), "]", sep = "")
+        }
+        if (length(regex[[i]][regex[[i]] != " "]) > 1) 
+            regex[[i]] <- c("[", regex[[i]], "]")
+        if (any(regex[[i]] == "" | regex[[i]] == " " | is.na(regex[[i]]))) 
+            regex[[i]] <- c(regex[[i]][regex[[i]] != " "], "?")
+    }
+    regex <- paste(unlist(lapply(regex, paste, sep = "", collapse = "")), 
+        sep = "", collapse = "")
+    message("Assuming gene/probe names have regex '", regex, 
+        "'.")
+    c(prefix, regex)
+}
 get.genome.info <-
-function (fetch.upstream = F, fetch.predicted.operons = "rsat") 
+function (fetch.upstream = F) 
 {
     rsat.url <- rsat.urls[1]
     feature.tab <- feature.names <- genome.seqs <- operons <- org.id <- synonyms <- NULL
@@ -2105,13 +2250,13 @@ function (fetch.upstream = F, fetch.predicted.operons = "rsat")
             genome.loc, "and let me know if I am wrong"))
     nskip <- sum(substr(readLines(gzfile(fname), n = 20), 1, 
         2) == "--" | readLines(gzfile(fname), n = 20) == "")
-    org.id <- read.delim(gzfile(fname), head = F, as.is = T, 
+    org.id <- read.delim(gzfile(fname), header = F, as.is = T, 
         skip = nskip)
     if (!exists("taxon.id") || is.na(taxon.id) || is.null(taxon.id)) 
         taxon.id <- org.id$V1[1]
     cat("Organism taxon id:", taxon.id, "\n")
     closeAllConnections()
-    if (!no.genome.info) {
+    if (!no.genome.info && !all(grepl("file=", names(mot.weights)))) {
         fname <- paste("data/", rsat.species, "/feature.tab", 
             sep = "")
         use.cds <- FALSE
@@ -2126,7 +2271,7 @@ function (fetch.upstream = F, fetch.predicted.operons = "rsat")
         head <- readLines(gzfile(fname), n = 30)
         nskip <- length(grep("^--", head))
         feature.tab <- read.delim(gzfile(fname), skip = nskip, 
-            head = F, comment = "", as.is = F)
+            header = F, comment.char = "", as.is = F)
         closeAllConnections()
         head <- strsplit(gsub("^-- ", "", head[grep("^-- id", 
             head, perl = T)], perl = T), "\t")[[1]]
@@ -2139,8 +2284,8 @@ function (fetch.upstream = F, fetch.predicted.operons = "rsat")
         nskip <- sum(substr(readLines(gzfile(fname), n = 20), 
             1, 2) == "--")
         closeAllConnections()
-        feature.names <- read.delim(gzfile(fname), head = F, 
-            as.is = T, skip = nskip, row.names = NULL, comment = "")
+        feature.names <- read.delim(gzfile(fname), header = F, 
+            as.is = T, skip = nskip, row.names = NULL, comment.char = "")
         closeAllConnections()
         colnames(feature.names) <- c("id", "names", "type")
         feature.names <- unique(feature.names)
@@ -2192,33 +2337,31 @@ function (fetch.upstream = F, fetch.predicted.operons = "rsat")
             if (length(genome.seqs) <= 0) 
                 genome.seqs <- NULL
         }
-        if (exists("ratios") && !is.null(ratios)) {
-            cat("Gathering all \"standard\" orf names and other synonyms for all probe names...\n")
-            tmp <- get.synonyms(attr(ratios, "rnames"), feature.names, 
-                verbose = T)
-            is.bad <- sapply(names(tmp), function(i) length(tmp[[i]]) == 
-                0 || substr(tmp[[i]][1], 1, 5) == "Error")
-            if (sum(is.bad) > 0) {
-                cat("These", sum(is.bad), "probe names have no matching ORF annotation:\n")
-                print(names(which(is.bad)))
-            }
-            cat("Mean number of synonyms per probe:", mean(sapply(tmp, 
-                length), na.rm = T), "\n")
-            synonyms <- tmp
-            rm(tmp, is.bad)
+    }
+    synonyms <- NULL
+    if (exists("synonym.thesaurus")) {
+        cat("Loading synonym information from custom thesaurus...\n")
+        tmp <- read.csv(gzfile(synonym.thesaurus), header = F)
+        synonyms <- strsplit(toupper(as.character(tmp[, 2])), 
+            ";")
+        names(synonyms) <- toupper(as.character(tmp[, 1]))
+        rm(tmp)
+    }
+    else if (exists("ratios") && !is.null(ratios)) {
+        cat("Gathering all \"standard\" orf names and other synonyms for all probe names...\n")
+        synonyms <- get.synonyms(attr(ratios, "rnames"), feature.names, 
+            verbose = T)
+    }
+    if (!is.null(synonyms)) {
+        cat("Mean number of synonyms per probe:", mean(sapply(synonyms, 
+            length), na.rm = T), "\n")
+        is.bad <- sapply(names(synonyms), function(i) length(synonyms[[i]]) == 
+            0 || substr(synonyms[[i]][1], 1, 5) == "Error")
+        if (sum(is.bad) > 0) {
+            cat("These", sum(is.bad), "probe names have no matching ORF annotation:\n")
+            print(names(which(is.bad)))
         }
-        if (!is.na(mot.iters[1]) && fetch.upstream) {
-            fname <- paste("data/", rsat.species, "/upstream-noorf.fasta.gz", 
-                sep = "")
-            err <- dlf(fname, paste(genome.loc, rsat.species, 
-                "_upstream-noorf.fasta.gz", sep = ""), "Fetching upstream sequences from RSAT...")
-            upstream.noorf <- readLines(gzfile(fname))
-            fname <- paste("data/", rsat.species, "/upstream.fasta.gz", 
-                sep = "")
-            err <- dlf(fname, paste(genome.loc, rsat.species, 
-                "_upstream.fasta.gz", sep = ""))
-            upstream <- readLines(gzfile(fname))
-        }
+        rm(is.bad)
     }
     closeAllConnections()
     invisible(list(species = rsat.species, genome.seqs = genome.seqs, 
@@ -2285,7 +2428,7 @@ function (mast.output, in.genes = NULL)
         l <- line.starts[i]
         gene <- mast.output[l - 2]
         if (is.null(gene) || is.na(gene) || (!is.null(in.genes) && 
-            !(gene %in% in.genes))) 
+            !(gene %in% in.genes) && !(toupper(gene) %in% toupper(in.genes)))) 
             next
         l.next <- line.starts[i + 1] - 2
         if (i >= length(line.starts)) 
@@ -2339,7 +2482,7 @@ function (k, seq.type = "upstream meme", for.rows = "all")
 }
 get.network.scores <-
 function (k, net = networks$string, for.rows = "all", p1.col = "protein1", 
-    p2.col = "protein2", score.col = "combined_score") 
+    p2.col = "protein2", score.col = "combined_score", combine.func = sum) 
 {
     if (length(k) <= 0) 
         return(NULL)
@@ -2359,7 +2502,7 @@ function (k, net = networks$string, for.rows = "all", p1.col = "protein1",
     if (is.null(cons) || nrow(cons) <= 0) 
         return(rep(NA, length(for.rows)))
     tmp <- tapply(as.numeric(cons[[score.col]]), as.character(cons[[p2.col]]), 
-        sum, na.rm = T)/length(rows)
+        combine.func, na.rm = T)/length(rows)
     scores <- rep(NA, length(for.rows))
     names(scores) <- for.rows
     scores[names(tmp)] <- tmp
@@ -2403,10 +2546,15 @@ function (fetch.predicted.operons = "microbes.online", org.id = genome.info$org.
         if (file.exists(fname)) 
             cat("Succesfully fetched operon predictions. Parsing...\n")
         ops <- read.delim(gzfile(fname))
-        ops2 <- subset(ops, bOp == "TRUE" & SysName1 != "" & 
-            SysName2 != "")
-        gns <- sort(unique(c(as.character(ops2$SysName1), as.character(ops2$SysName2))))
-        gns <- gns[gns != ""]
+        ops2 <- ops
+        on <- as.character(ops2$SysName1)[-1]
+        bOp <- ops2$bOp[-1]
+        on[which(on == "")] <- on[which(on == "") - 1]
+        ops2$SysName1 <- c(as.character(ops2$SysName1)[1], on)
+        on <- as.character(ops2$SysName2)[-1]
+        on[which(on == "")] <- on[which(on == "") - 1]
+        ops2$SysName2 <- c(as.character(ops2$SysName2)[1], on)
+        ops2 <- subset(ops2, bOp == "TRUE")
         sn1 <- as.character(ops2$SysName1)
         sn1[sn1 == "" | is.na(sn1)] <- as.character(ops2$Name1)[sn1 == 
             "" | is.na(sn1)]
@@ -2416,6 +2564,8 @@ function (fetch.predicted.operons = "microbes.online", org.id = genome.info$org.
         operons <- list(0)
         for (i in 1:length(sn1)) {
             sn1i <- sn1[i]
+            if (sn1i == "") 
+                next
             found <- which(sapply(operons, function(j) sn1i %in% 
                 j))
             if (length(found) > 0) 
@@ -2424,6 +2574,10 @@ function (fetch.predicted.operons = "microbes.online", org.id = genome.info$org.
             else operons[[length(operons) + 1]] <- c(sn1i, sn2[i])
         }
         operons <- operons[-1]
+        operons <- lapply(operons, unique)
+        operons <- lapply(operons, function(i) i[i != ""])
+        operons <- operons[sapply(operons, length) > 1]
+        gns <- unlist(operons)
         search.names <- c(gns, as.character(genome.info$feature.names$id))
         if (exists("ratios")) 
             search.names <- c(attr(ratios, "rnames"), search.names)
@@ -2470,7 +2624,7 @@ function (fetch.predicted.operons = "microbes.online", org.id = genome.info$org.
         })
         names(operons) <- unlist(nms)
         operons <- operons[names(operons) != ""]
-        operons <- do.call(rbind, lapply(names(operons), function(h) data.frame(head = h, 
+        operons <- do.call(rbind, lapply(names(operons), function(h) data.frame(header = h, 
             gene = operons[[h]])))
         operons <- subset(operons, head != "")
     }
@@ -2564,40 +2718,33 @@ function (k, cols = get.cols(k), for.rows = "all", ratios = ratios[[1]],
     if (is.numeric(k[1])) 
         rows <- get.rows(k)
     else rows <- k
-    if (for.rows[1] == "all") 
+    if (is.null(for.rows) || for.rows[1] == "all") 
         for.rows <- rownames(ratios)
     rows <- rows[rows %in% rownames(ratios)]
     cols <- cols[cols %in% colnames(ratios)]
-    if (length(rows) < 1 || length(cols) <= 1) 
+    if (length(rows) < 1 || length(cols) < 1) 
         return(rep(NA, length(for.rows)))
     rats <- ratios[for.rows, cols, drop = F]
     rats.mn <- colMeans(rats[rows, , drop = F], na.rm = T)
-    rats.mn <- matrix(rats.mn, nrow = nrow(rats), ncol = ncol(rats), 
-        byrow = T)
-    rats[, ] <- (rats[, ] - rats.mn)^2
+    rats[, ] <- t(t(rats) - rats.mn)^2
     col.weights <- if (exists("get.col.weights")) 
         get.col.weights(rows, cols, ratios)
     else NA
     if (is.na(col.weights[1])) 
         rats <- rowMeans(rats, na.rm = T)
-    else rats <- apply(abs(rats), 1, weighted.mean, w = col.weights[cols], 
+    else rats <- apply(rats, 1, weighted.mean, w = col.weights[cols], 
         na.rm = T)
     rats <- log(rats + 1e-99)
     return(rats)
 }
 get.rows <-
-function (k, rm = get("row.membership")) 
-{
-    out <- unique(rownames(which(rm[] == k, arr = T)))
-    if (is.null(out)) 
-        out <- character()
-    out
-}
+function (k) 
+clusterStack[[k]]$rows
 get.sequences <-
 function (k, seq.type = paste(c("upstream", "upstream.noncod", 
     "upstream.noncod.same.strand", "downstream", "gene")[1], 
     "meme"), verbose = F, filter = T, distance = motif.upstream.search[[seq.type]], 
-    ...) 
+    op.shift, ...) 
 {
     if (length(k) <= 0) 
         return(NULL)
@@ -2609,15 +2756,34 @@ function (k, seq.type = paste(c("upstream", "upstream.noncod",
     if (is.null(rows)) 
         return(NULL)
     start.stops <- NULL
-    if (is.na(seq.type) || strsplit(seq.type, " ")[[1]][1] == 
-        "gene") 
-        op.shift <- FALSE
-    seq.type <- seq.type
     n.seq.type <- strsplit(seq.type, " ")[[1]][1]
-    if (substr(seq.type, 1, 5) == "file=") {
-        seqs <- read.fasta(fname = strsplit(n.seq.type, "=")[[1]][2])
+    if (substr(n.seq.type, 1, 8) == "fstfile=") {
+        if (!is.null(genome.info$all.upstream.seqs[[seq.type]]) && 
+            length(genome.info$all.upstream.seqs[[seq.type]]) > 
+                0) {
+            seqs <- genome.info$all.upstream.seqs[[seq.type]]
+        }
+        else {
+            seqs <- read.fasta(fname = gzfile(strsplit(n.seq.type, 
+                "=")[[1]][2]))
+        }
         seqs <- seqs[rows]
-        names(seqs) <- rows
+        names(seqs) <- toupper(rows)
+    }
+    else if (substr(n.seq.type, 1, 8) == "csvfile=") {
+        if (!is.null(genome.info$all.upstream.seqs[[seq.type]]) && 
+            length(genome.info$all.upstream.seqs[[seq.type]]) > 
+                0) {
+            seqs <- genome.info$all.upstream.seqs[[seq.type]]
+        }
+        else {
+            tab <- read.csv(gzfile(strsplit(n.seq.type, "=")[[1]][2]), 
+                header = F)
+            seqs <- as.character(tab[, 2])
+            names(seqs) <- toupper(as.character(tab[, 1]))
+        }
+        seqs <- seqs[rows]
+        names(seqs) <- toupper(rows)
     }
     else {
         if (is.null(genome.info$feature.tab) || !"genome.seqs" %in% 
@@ -2636,8 +2802,17 @@ function (k, seq.type = paste(c("upstream", "upstream.noncod",
                   " sequences!")
             }
         }
-        op.shift <- operon.shift[seq.type]
-        coos <- get.gene.coords(rows, op.shift)
+        if (missing(op.shift)) {
+            if (is.na(seq.type) || seq.type == "gene") 
+                op.shift <- FALSE
+            else op.shift <- operon.shift[seq.type]
+            if (is.na(op.shift)) 
+                op.shift <- operon.shift[1]
+            if (n.seq.type %in% c("gene", "upstream.noncod", 
+                "upstream.noncod.same.strand")) 
+                op.shift <- FALSE
+        }
+        coos <- get.gene.coords(rows, op.shift = op.shift)
         if (is.null(coos) || nrow(coos) <= 0) 
             return(NULL)
         coos <- subset(coos, !is.na(start_pos) & !is.na(end_pos))
@@ -2647,7 +2822,7 @@ function (k, seq.type = paste(c("upstream", "upstream.noncod",
         if (n.seq.type %in% c("upstream.noncod", "upstream.noncod.same.strand")) {
             all.coos <- genome.info$feature.tab[, c("id", "name", 
                 "contig", "strand", "start_pos", "end_pos")]
-            all.coos <- subset(all.coos, name %in% unlist(genome.info$synonyms))
+            all.coos <- subset(all.coos, grepl("^NP_", id, perl = T))
         }
         mc <- get.parallel(nrow(coos))
         tmp <- mc$apply(1:nrow(coos), function(i) {
@@ -2691,7 +2866,7 @@ function (k, seq.type = paste(c("upstream", "upstream.noncod",
                 st.st[1], st.st[2])
             if (coos$strand[i] == "R") 
                 seq <- rev.comp(seq)
-            if (nchar(seq) > abs(diff(distance))) {
+            if (seq.type != "gene" && nchar(seq) > abs(diff(distance))) {
                 if (coos$strand[i] == "D") 
                   seq <- substr(seq, 1, abs(diff(distance)))
                 else seq <- rev.comp(substr(rev.comp(seq), 1, 
@@ -2727,12 +2902,37 @@ function (k, seq.type = paste(c("upstream", "upstream.noncod",
     invisible(seqs)
 }
 get.stats <-
-function (mean.func = median) 
+function (mean.func = mean) 
 {
     changed <- NA
-    if (!is.null(old.row.membership)) 
-        changed <- sum(row.memb[, ] != t(apply(old.row.membership, 
-            1, function(i) 1:k.clust %in% i)), na.rm = T)
+    if (!exists("row.memb")) {
+        row.memb <- sapply(1:k.clust, function(k) attr(ratios, 
+            "rnames") %in% get.rows(k))
+        if (is.vector(row.memb)) 
+            row.memb <- t(row.memb)
+        rownames(row.memb) <- attr(ratios, "rnames")
+        col.memb <- sapply(1:k.clust, function(k) attr(ratios, 
+            "cnames") %in% get.cols(k))
+        if (is.vector(col.memb)) 
+            col.memb <- t(col.memb)
+        rownames(col.memb) <- attr(ratios, "cnames")
+    }
+    if (!exists("row.scores") || is.null(row.scores)) {
+        if (attr(get.all.scores, "version") == 1) {
+            tmp <- get.all.scores()
+            row.scores <- tmp$r
+            mot.scores <- tmp$m
+            net.scores <- tmp$n
+            col.scores <- tmp$c
+        }
+        else if (attr(get.all.scores, "version") == 2) {
+            tmp <- get.old.scores.matrices()
+            row.scores <- tmp$r
+            mot.scores <- tmp$m
+            net.scores <- tmp$n
+            col.scores <- tmp$c
+        }
+    }
     cs <- as.list(clusterStack)
     resids <- sapply(cs, "[[", "resid")
     if (is.matrix(resids)) 
@@ -2740,15 +2940,18 @@ function (mean.func = median)
             1], na.rm = T))
     else resids <- mean.func(resids[resids != 1], na.rm = T)
     p.clusts <- sapply(cs, "[[", "p.clust")
+    if (is.list(p.clusts)) 
+        p.clusts <- sapply(cs[!sapply(p.clusts, is.null)], "[[", 
+            "p.clust")
     if (is.matrix(p.clusts)) 
         p.clusts <- apply(p.clusts, 1, mean.func, na.rm = T)
     else p.clusts <- mean.func(p.clusts, na.rm = T)
-    out <- data.frame(iter = iter, changed = changed, row.scores = mean(row.scores[, 
-        ][row.memb[, ] == 1], na.rm = T, trim = 0.05), col.scores = mean(col.scores[, 
-        ][col.memb[, ] == 1], na.rm = T, trim = 0.05), mot.scores = if (!is.null(mot.scores)) 
-        mean.func(mot.scores[, ][row.memb[, ] == 1], na.rm = T)
+    out <- data.frame(iter = iter, changed = changed, row.scores = mean.func(row.scores[, 
+        ][row.memb[, ]], na.rm = T), col.scores = mean.func(col.scores[, 
+        ][col.memb[, ]], na.rm = T), mot.scores = if (!is.null(mot.scores)) 
+        mean.func(mot.scores[, ][row.memb[, ]], na.rm = T)
     else NA, net.scores = if (!is.null(net.scores)) 
-        mean(net.scores[, ][row.memb[, ] == 1], na.rm = T, trim = 0.05)
+        mean.func(net.scores[, ][row.memb[, ]], na.rm = T)
     else NA, resid = weighted.mean(resids, row.weights, na.rm = T), 
         nrow = mean.func(sapply(cs, "[[", "nrows"), na.rm = T), 
         ncol = mean.func(sapply(cs, "[[", "ncols"), na.rm = T), 
@@ -2774,9 +2977,14 @@ function (mean.func = median)
             names(out)[ncol(out)] <- paste("net", i, sep = ".")
         }
         if (exists("cluster.net.scores") && "net.scores" %in% 
-            colnames(cluster.net.scores)) 
+            colnames(cluster.net.scores)) {
             out[, "net.scores"] <- weighted.mean(cluster.net.scores[, 
                 "net.scores"], sapply(cs, "[[", "nrows"), na.rm = T)
+        }
+        else {
+            out[, "net.scores"] <- mean.func(net.scores[, ][row.memb[, 
+                ]], na.rm = T)
+        }
     }
     out
 }
@@ -2790,17 +2998,18 @@ function (gns, ft = genome.info$feature.names, ignore.case = T,
         return(out)
     }
     out <- list()
-    if (!force && exists("genome.info") && !is.null(genome.info$synonyms)) {
+    if ((!force && exists("genome.info") && !is.null(genome.info$synonyms))) {
         gns.cached <- gns[gns %in% names(genome.info$synonyms)]
         out <- genome.info$synonyms[gns.cached]
         gns <- gns[!gns %in% names(genome.info$synonyms)]
-        if (length(gns) <= 0) 
+        if (length(gns) <= 0 || (is.null(ft) && (!exists("translation.tab") || 
+            is.null(translation.tab)))) 
             return(out)
     }
     tmp.out <- as.list(gns)
     names(tmp.out) <- gns
-    if (is.null(ft)) 
-        return(tmp.out)
+    if (is.null(ft) && (!exists("translation.tab") || is.null(translation.tab))) 
+        return(c(out, tmp.out))
     gns.orig <- gns
     gns <- gsub("m$|_\\d$|\\-\\S$", "", gns, perl = T)
     gns <- gsub("([\\[\\]\\(\\)\\{\\}\\.\\+\\-'\"])", "\\\\\\1", 
@@ -2812,14 +3021,15 @@ function (gns, ft = genome.info$feature.names, ignore.case = T,
             names = as.character(translation.tab$V2)))
     ft <- subset(ft, names != "")
     if (verbose) 
-        ggggg <- gns[seq(100, length(gns), by = 100)]
+        ggggg <- gns[seq(1, length(gns), by = min(length(gns), 
+            100))]
     mc <- get.parallel(length(gns), verbose = F)
     tmp <- mc$apply(gns, function(g) {
         if (verbose && g %in% ggggg) 
             cat(" ...", g)
         greg <- paste("^", g, sep = "")
-        tmp <- subset(ft, grepl(greg, id, perl = T, ignore = ignore.case) | 
-            grepl(greg, names, perl = T, ignore = ignore.case))
+        tmp <- subset(ft, grepl(greg, id, perl = T, ignore.case = ignore.case) | 
+            grepl(greg, names, perl = T, ignore.case = ignore.case))
         if (nrow(tmp) <= 0) 
             return(g)
         tmp2 <- unique(c(g, as.character(tmp$id), as.character(tmp$names)))
@@ -2843,13 +3053,16 @@ function (...)
     return(ratios.raw)
 }
 get.updated.memberships <-
-function () 
+function (row.membership, col.membership, rr.scores, cc.scores) 
 {
-    rm <- t(apply(rr.scores[, ], 1, order, decreasing = T)[1:n.clust.per.row, 
+    rm <- t(apply(rr.scores, 1, order, decreasing = T)[1:n.clust.per.row, 
         , drop = F])
     rm <- t(apply(rm, 1, sort))
     if (n.clust.per.row == 1) 
         rm <- t(rm)
+    if (ncol(rm) < ncol(row.membership)) 
+        rm <- cbind(rm, matrix(0, nrow = nrow(rm), ncol = ncol(row.membership) - 
+            ncol(rm)))
     for (i in 1:nrow(rm)) {
         if (all(rm[i, ] %in% row.membership[i, ])) 
             next
@@ -2891,8 +3104,11 @@ function ()
         }
     }
     if (!is.null(cc.scores)) {
-        cm <- t(apply(cc.scores[, ], 1, order, decreasing = T)[1:n.clust.per.col, 
+        cm <- t(apply(cc.scores, 1, order, decreasing = T)[1:n.clust.per.col, 
             , drop = F])
+        if (ncol(cm) < ncol(col.membership)) 
+            cm <- cbind(cm, matrix(0, nrow = nrow(cm), ncol = ncol(col.membership) - 
+                ncol(cm)))
         for (i in 1:nrow(cm)) {
             mc <- max.changes["cols"]
             if (mc < 1 && mc > 0 && runif(1) > mc) 
@@ -3016,10 +3232,10 @@ function (memeOut, n.motif = 1)
                 2 + 1:winLen], "\\s+", perl = T))[, 2:5]
             pssm <- matrix(as.numeric(pssm), nrow = winLen, ncol = 4, 
                 byrow = F)
-            pssms[[i]] <- list(pssm = pssm, e.val = e.val)
+            pssms[[i]] <- list(pssm = pssm, e.value = e.val)
         }
         else {
-            pssms[[i]] <- list(pssm = NULL, e.val = 99999)
+            pssms[[i]] <- list(pssm = NULL, e.value = 99999)
         }
     }
     return(pssms)
@@ -3029,14 +3245,14 @@ function (scores = r.scores, cor.cutoff = 0.9)
 {
     cors <- cor(scores[, ], use = "pairwise", method = "pearson")
     cors[lower.tri(cors, diag = T)] <- NA
-    tmp <- which(cors >= cor.cutoff, arr = T)
+    tmp <- which(cors >= cor.cutoff, arr.ind = T)
     cbind(tmp, cors[tmp])
 }
 install.binaries <-
 function (meme.version = "4.3.0", url = sprintf("http://meme.nbcr.net/downloads/old_versions/meme_%s.tar.gz", 
-    meme.version)) 
+    meme.version), make = "make -j 4", path = system.file(package = "cMonkey")) 
 {
-    cwd <- setwd(system.file(package = "cMonkey"))
+    cwd <- setwd(path)
     on.exit(setwd(cwd))
     if (!exists("progs")) 
         dir.create("progs")
@@ -3048,13 +3264,56 @@ function (meme.version = "4.3.0", url = sprintf("http://meme.nbcr.net/downloads/
     dir.create("local")
     system(sprintf("./configure --prefix=%s/local/ --enable-dependency-tracking --enable-opt --disable-shared --disable-fast-install --enable-serial --enable-build-libxml2 --enable-build-libxslt --disable-shared --enable-static --with-gnu-ld", 
         getwd()))
-    system("make")
+    system(make)
     system("make install")
     setwd("..")
     system(sprintf("ln -s meme_%s/local/bin/meme", meme.version))
     system(sprintf("ln -s meme_%s/local/bin/mast", meme.version))
     system(sprintf("ln -s meme_%s/local/bin/dust", meme.version))
     setwd(cwd)
+}
+load.data <-
+function (org.code = NULL) 
+{
+    try(dlf("data/NCBI/taxdump.tar.gz", sprintf("ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz")))
+    system("cd data/NCBI; tar -xvzf taxdump.tar.gz names.dmp; gzip -v names.dmp")
+    if (!is.null(org.code)) {
+        lines <- system(sprintf("gunzip -c data/NCBI/names.dmp.gz | grep \"%s\"", 
+            as.character(org.code)), intern = T)
+    }
+    lines <- do.call(rbind, lapply(strsplit(lines, "\t"), function(i) i[i != 
+        "" & i != "|"]))[, 1:2]
+    while (length(unique(lines[, 1])) > 1) {
+    }
+    taxon.id <- as.integer(unique(lines[, 1]))
+    org.name <- unique(lines[, 2])
+    try(dlf(sprintf("%s/genome.txt", data.dir), sprintf("http://microbesonline.org/cgi-bin/genomeInfo.cgi?tId=%s;export=genome", 
+        taxon.id)))
+    system(sprintf("gzip -v %s/genome.txt", data.dir))
+    genome <- read.fasta(gzfile(sprintf("%s/genome.txt.gz", data.dir)))
+    data.dir <- sprintf("data/%s/", gsub("[.,; ]", "_", org.name[1]))
+    try(dlf(sprintf("%s/genome_info.tsv", data.dir), sprintf("http://microbesonline.org/cgi-bin/genomeInfo.cgi?tId=%d;export=tab", 
+        taxon.id)))
+    system(sprintf("gzip -v %s/genome_info.tsv", data.dir))
+    genome.info <- read.delim(gzfile(sprintf("%s/genome_info.tsv.gz", 
+        data.dir)), header = T)
+    invisible(list(taxon.id = taxon.id, org.name = org.name, 
+        genome = genome, genome.info = genome.info))
+}
+load.genome.info.MicrobesOnline <-
+function (id = taxon.id) 
+{
+    f <- sprintf("data/%s/microbesOnlineGenomeInfo_%d.tsv", rsat.species, 
+        id)
+    if (!file.exists(sprintf("%s.gz", f))) {
+        try(dlf(f, sprintf("http://www.microbesonline.org/cgi-bin/genomeInfo.cgi?tId=%d;export=tab", 
+            id)))
+        system(sprintf("gzip -fv %s", f))
+    }
+    cat("Loading:", f, "\n")
+    out <- read.delim(gzfile(sprintf("%s.gz", f)), row.names = 1, 
+        sep = "\t", as.is = T, header = T)
+    out
 }
 load.ratios <-
 function (ratios) 
@@ -3085,42 +3344,10 @@ function (ratios)
         ratios <- preprocess.ratios(ratios)
         attr(ratios, "isPreProcessed") <- TRUE
     }
+    cat("Processed ratios matrix is", paste(dim(ratios), collapse = "x"), 
+        "\n")
     closeAllConnections()
     ratios
-}
-load.sif.interactions <-
-function (sif.fname) 
-{
-    sif <- read.delim(gzfile(sif.fname), sep = "", head = F, 
-        comment = "#")
-    contains.weights <- ncol(sif) == 3 && any(sapply(1:ncol(sif), 
-        function(i) is.numeric(sif[, i])))
-    if (contains.weights) {
-        weight.col <- which(sapply(1:ncol(sif), function(i) is.numeric(sif[, 
-            i])))
-        if (length(weight.col) == 1) {
-            sif[, weight.col] <- sif[, weight.col] * 1000/max(sif[, 
-                weight.col], na.rm = T)
-            if (weight.col == 1) 
-                sif <- sif[, c(2, 1, 3)]
-            else if (weight.col == 3) 
-                sif <- sif[, c(1, 3, 2)]
-            colnames(sif) <- c("V1", "V2", "V3")
-        }
-    }
-    else if (ncol(sif) == 3) {
-        sif <- data.frame(V1 = sif$V1, V2 = rep(1000, nrow(sif)), 
-            V3 = sif$V3)
-    }
-    else {
-        sif <- data.frame(V1 = sif$V1, V2 = rep(1000, nrow(sif)), 
-            V3 = sif$V2)
-    }
-    sif$V2[is.na(sif$V2)] <- 0
-    sif <- sif[, c("V1", "V3", "V2")]
-    colnames(sif) <- c("protein1", "protein2", "combined_score")
-    closeAllConnections()
-    sif
 }
 make.pv.ev.matrix <-
 function (out.ms, make.ev = F) 
@@ -3170,7 +3397,7 @@ function (m, ...)
 }
 meme.one.cluster <-
 function (k, seq.type = names(mot.weights)[1], verbose = F, force = F, 
-    ...) 
+    keep.meme.out = F, keep.mast.out = F, ...) 
 {
     if (is.numeric(k)) 
         rows <- get.rows(k)
@@ -3178,9 +3405,8 @@ function (k, seq.type = names(mot.weights)[1], verbose = F, force = F,
     meme.out <- mast.out <- NULL
     cmd <- sprintf(meme.cmd[seq.type], n.motifs[[seq.type]][iter])
     pal.opt <- "non"
-    if (grepl("-pal=non", cmd)) {
-        cmd <- gsub("-pal=non", "", cmd)
-    }
+    if ("pal.opt" %in% names(list(...))) 
+        pal.opt <- list(...)$pal.opt
     get.meme.consensus <- function(cmd, min.iter = 500, max.e.value = 0.1, 
         ...) {
         if (grepl("-cons $compute", cmd, fixed = T)) {
@@ -3197,13 +3423,18 @@ function (k, seq.type = names(mot.weights)[1], verbose = F, force = F,
             cmd <- gsub("-cons $compute", "", cmd, fixed = T)
         cmd
     }
-    ms <- try(meme.scores[[seq.type]][[k]])
-    if ("try-error" %in% class(ms)) 
-        ms <- NULL
+    ms <- NULL
+    if (is.numeric(k)) {
+        ms <- try(meme.scores[[seq.type]][[k[1]]])
+        if ("try-error" %in% class(ms)) 
+            ms <- NULL
+    }
     if (!is.null(ms)) 
         cmd <- get.meme.consensus(cmd, ...)
     if (grepl("-cons $none", cmd, fixed = T)) 
         cmd <- gsub("-cons $none", "", cmd, fixed = T)
+    if (grepl("-cons $compute", cmd, fixed = T)) 
+        cmd <- gsub("-cons $compute", "", cmd, fixed = T)
     bg.list <- genome.info$bg.list[[seq.type]]
     bg.fname <- genome.info$bg.fname[seq.type]
     bgo <- bg.order[seq.type]
@@ -3236,14 +3467,14 @@ function (k, seq.type = names(mot.weights)[1], verbose = F, force = F,
     if (!is.na(bgo) && grepl("-bfile $bgFname", cmd, fixed = T)) {
         if (!recalc.bg && !file.exists(bg.fname)) {
             genome.info$bg.fname[seq.type] <- bg.fname <- my.tempfile("meme.tmp", 
-                suf = ".bg")
+                suffix = ".bg")
             capture.output(genome.info$bg.list[[seq.type]] <- mkBgFile(all.seqs, 
                 order = bgo, bgfname = bg.fname, input.list = bg.list, 
                 use.rev.comp = grepl("-revcomp", meme.cmd[seq.type])))
         }
         if (recalc.bg || is.null(bg.list)) {
             tmp.seqs <- all.seqs[!names(all.seqs) %in% rows]
-            bg.fname <- my.tempfile("meme.tmp", suf = ".bg")
+            bg.fname <- my.tempfile("meme.tmp", suffix = ".bg")
             capture.output(bg.list <- mkBgFile(tmp.seqs, order = bg.order[seq.type], 
                 verbose = F, bgfname = bg.fname, use.rev.comp = grepl("-revcomp", 
                   meme.cmd[seq.type])))
@@ -3293,8 +3524,13 @@ function (k, seq.type = names(mot.weights)[1], verbose = F, force = F,
         unlink(bg.fname)
     prev.run <- list(rows = rows, cmd = cmd, bg.order = bgo, 
         m.u.scan = motif.upstream.scan[[seq.type]])
-    invisible(list(k = k, last.run = FALSE, meme.out = meme.out2, 
-        pv.ev = pv.ev, prev.run = prev.run))
+    out <- list(k = k, last.run = FALSE, meme.out = meme.out2, 
+        pv.ev = pv.ev, prev.run = prev.run)
+    if (keep.meme.out) 
+        out$meme.out.orig <- meme.out
+    if (keep.mast.out) 
+        out$mast.out.orig <- mast.out
+    invisible(out)
 }
 mkBgFile <-
 function (bgseqs = NULL, order = 0, bgfname = NULL, input.list = NULL, 
@@ -3354,7 +3590,7 @@ function (bgseqs = NULL, order = 0, bgfname = NULL, input.list = NULL,
         counts <- table(as.factor(all.substrings))
         counts <- sort(counts)
         counts <- counts/length(all.substrings)
-        counts <- counts[grep("N", names(counts), val = T, invert = T)]
+        counts <- counts[grep("N", names(counts), value = T, invert = T)]
         out <- as.list(counts)
         for (i in names(out)) {
             names(out[[i]]) <- NULL
@@ -3502,13 +3738,15 @@ function (ks = 1:k.clust, seq.type = names(mot.weights)[1], verbose = T,
     invisible(out.ms)
 }
 motif.one.cluster <-
-function (k, seq.type = names(mot.weights)[1], verbose = F, ...) 
+function (k, seq.type = names(mot.weights)[1], verbose = F, force = F, 
+    ...) 
 {
     st <- strsplit(seq.type, " ")[[1]]
-    out <- NULL
-    if (st[2] == "meme") 
+    out <- meme.scores[[seq.type]][[k]]
+    if (st[2] == "meme") {
         out <- meme.one.cluster(k, seq.type = seq.type, verbose, 
-            ...)
+            force = force, ...)
+    }
     invisible(out)
 }
 my.tempfile <-
@@ -3518,6 +3756,18 @@ function (pattern = "file", tmpdir = tempdir(), suffix = "",
     file.path(paste(tmpdir, "/", pattern, "_", paste(sample(c(LETTERS, 
         letters, 0:9, 0:9, 0:9, 0:9), n.rnd.char), collapse = ""), 
         suffix, sep = ""))
+}
+operon.list <-
+function () 
+{
+    out <- list()
+    ops <- as.matrix(genome.info$operons)
+    for (i in 1:nrow(ops)) {
+        if (!ops[i, 1] %in% names(out)) 
+            out[[ops[i, 1]]] <- ops[i, 2]
+        else out[[ops[i, 1]]] <- c(out[[ops[i, 1]]], ops[i, 2])
+    }
+    out
 }
 plotClust <-
 function (k, cluster = NULL, w.motifs = T, all.conds = T, title = NULL, 
@@ -3536,7 +3786,7 @@ function (k, cluster = NULL, w.motifs = T, all.conds = T, title = NULL,
     c <- get.clust(k, varNorm = F)
     rows <- get.rows(k)
     if (!is.null(o.genes)) 
-        rows <- c(rows, o.genes)
+        rows <- unique(c(rows, o.genes))
     if (length(rows) <= 0) {
         warning("Trying to plot a cluster with no rows!")
         return()
@@ -3570,14 +3820,19 @@ function (k, cluster = NULL, w.motifs = T, all.conds = T, title = NULL,
                   pv.ev <- meme.scores[[st]][[k]]$pv.ev[[1]]
                   if (ncol(pv.ev) <= 2) 
                     pv.ev <- meme.scores[[st]][[k]]$pv.ev[[2]]
-                  tmp <- as.matrix(pv.ev[, 2:ncol(pv.ev)])
-                  rownames(tmp) <- pv.ev[, 1]
-                  colnames(tmp) <- c("p.value", "posns", "mots")
+                  tmp <- NULL
+                  if (ncol(pv.ev) > 0) {
+                    tmp <- as.matrix(pv.ev[, 2:ncol(pv.ev)])
+                    rownames(tmp) <- pv.ev[, 1]
+                    colnames(tmp) <- c("p.value", "posns", "mots")
+                  }
                 }
                 c[[st]]$motif.out$pv.ev[[1]] <- tmp
-                c[[st]]$motif.out$p.values <- log10(c[[st]]$motif.out$pv.ev[[1]][, 
-                  "p.value"])
-                names(c[[st]]$motif.out$p.values) <- rownames(c[[st]]$motif.out$pv.ev[[1]])
+                if (!is.null(tmp)) {
+                  c[[st]]$motif.out$p.values <- log10(c[[st]]$motif.out$pv.ev[[1]][, 
+                    "p.value"])
+                  names(c[[st]]$motif.out$p.values) <- rownames(c[[st]]$motif.out$pv.ev[[1]])
+                }
             }
         }
     }
@@ -3606,7 +3861,7 @@ function (k, cluster = NULL, w.motifs = T, all.conds = T, title = NULL,
             else tmp.net
         }
     }
-    c$gene.coords <- get.long.names(rows, short = short.names)
+    c$gene.coords <- get.long.names(rows, shorter = short.names)
     if ("cog.code" %in% names(genome.info)) 
         c$cog.code <- genome.info$cog.code[rows]
     if (!is.null(title)) 
@@ -3644,7 +3899,7 @@ function (cluster, imag = F, cond.labels = F, o.genes = NULL,
         rats <- rats[, cols.b, drop = F]
     }
     if (all(is.na(rats))) {
-        plot(0, 0, typ = "n", min = main, ...)
+        plot(0, 0, type = "n", min = main, ...)
         return()
     }
     if (is.vector(rats)) {
@@ -3666,7 +3921,7 @@ function (cluster, imag = F, cond.labels = F, o.genes = NULL,
     if (!no.par) 
         par(mar = rep(2, 4), mgp = c(3, 1, 0) * 0.5)
     plot(1:length(cols.b), ylim = range.r, xlab = NA, ylab = NA, 
-        main = main, typ = "n", xaxs = "i", ...)
+        main = main, type = "n", xaxs = "i", ...)
     if (length(rats.names) > 1) {
         ind <- 0.5
         rts <- NULL
@@ -3676,7 +3931,7 @@ function (cluster, imag = F, cond.labels = F, o.genes = NULL,
             col <- rgb(col[1], col[2], col[3])
             rect(ind, range.r[1] + 0.05, ind + sum(colnames(rats) %in% 
                 colnames(ratios[[rats.names[i]]])), range.r[2] - 
-                0.05, col = col, dens = NA)
+                0.05, col = col, density = NA)
             ind <- ind + sum(colnames(rats) %in% colnames(ratios[[rats.names[i]]]))
             rts <- cbind(rts, rats[, cols.b[cols.b %in% colnames(ratios[[rats.names[i]]]), 
                 drop = F]])
@@ -3747,7 +4002,8 @@ function (cluster, imag = F, cond.labels = F, o.genes = NULL,
 plotCluster.all.conds <-
 function (cluster, imag = F, cond.labels = F, o.genes = NULL, 
     rats.names = names(ratios), range.r = NULL, sort = F, box.plot = F, 
-    col.func = if (imag) topo.colors else rainbow, ...) 
+    col.func = if (imag) topo.colors else rainbow, only.in.conds = F, 
+    ...) 
 {
     if (length(cluster$rows) <= 0) {
         warning("Trying to plot a cluster with no rows!")
@@ -3761,6 +4017,8 @@ function (cluster, imag = F, cond.labels = F, o.genes = NULL,
         NULL, matrices = rats.names)
     cols.b <- c(colnames(rats)[colnames(rats) %in% cluster$cols], 
         colnames(rats)[!colnames(rats) %in% cluster$cols])
+    if (only.in.conds) 
+        cols.b <- colnames(rats)[colnames(rats) %in% cluster$cols]
     if (sort) {
         inClust <- colnames(rats)[colnames(rats) %in% cluster$cols]
         o1 <- order(apply(rats[cluster$rows, inClust, drop = F], 
@@ -3769,12 +4027,14 @@ function (cluster, imag = F, cond.labels = F, o.genes = NULL,
         o2 <- order(apply(rats[cluster$rows, outClust, drop = F], 
             2, mean, na.rm = T))
         cols.b <- c(inClust[o1], outClust[o2])
+        if (only.in.conds) 
+            cols.b <- inClust[o1]
     }
     len.b <- length(cols.b)
     rats <- rats[, cols.b, drop = F]
     par(mar = rep(2, 4), mgp = c(3, 1, 0) * 0.5)
     if (all(is.na(rats))) {
-        plot(0, 0, typ = "n", main = main, ...)
+        plot(0, 0, type = "n", main = main, ...)
         return()
     }
     if (is.vector(rats)) {
@@ -3793,7 +4053,7 @@ function (cluster, imag = F, cond.labels = F, o.genes = NULL,
     if (cond.labels && len.b < 100) 
         range.r[1] <- range.r[1] * 1.5
     plot(1:len.b, xlim = c(0.95, len.b + 0.05), ylim = range.r, 
-        xlab = NA, ylab = NA, main = main, typ = "n", xaxs = "i", 
+        xlab = NA, ylab = NA, main = main, type = "n", xaxs = "i", 
         ...)
     if (length(ratios) > 1) {
         ind <- 0.5
@@ -3809,7 +4069,7 @@ function (cluster, imag = F, cond.labels = F, o.genes = NULL,
                 col <- rgb(col[1], col[2], col[3])
                 rect(ind, range.r[1] + 0.01, ind + sum(cols %in% 
                   colnames(ratios[[i]])), range.r[2] - 0.01, 
-                  col = col, dens = NA)
+                  col = col, density = NA)
                 ind <- ind + sum(cols %in% colnames(ratios[[i]]))
                 if (in.out == 1) 
                   rts.in <- cbind(rts.in, rats[, cols[cols %in% 
@@ -3860,8 +4120,9 @@ function (cluster, imag = F, cond.labels = F, o.genes = NULL,
                 i)[1]])
     }
     cols.in <- colnames(rats)[colnames(rats) %in% cluster$cols]
-    lines(rep(length(cols.in) + 0.5, 2), range.r, col = 2, lwd = 3, 
-        lty = 2)
+    if (!only.in.conds) 
+        lines(rep(length(cols.in) + 0.5, 2), range.r, col = 2, 
+            lwd = 3, lty = 2)
     if (!is.null(o.genes)) {
         matlines(1:len.b, t(rats[o.genes, , drop = F]), lty = 1, 
             lwd = 3, col = 2:6)
@@ -3994,7 +4255,7 @@ function (cluster, seqs = cluster$seqs, layout = NULL, colors = NULL,
         }
     }
     while (n.plotted <= n.pssm.plot) {
-        plot(1, 1, typ = "n", axes = F, xaxt = "n", yaxt = "n", 
+        plot(1, 1, type = "n", axes = F, xaxt = "n", yaxt = "n", 
             xlab = "", ylab = "")
         n.plotted <- n.plotted + 1
     }
@@ -4008,7 +4269,7 @@ function (cluster, seqs = cluster$seqs, layout = NULL, colors = NULL,
         0) 
         plotClusterMotifPositions(cluster, seqs, colors = colors, 
             ...)
-    else plot(1, 1, typ = "n", axes = F, xaxt = "n", yaxt = "n", 
+    else plot(1, 1, type = "n", axes = F, xaxt = "n", yaxt = "n", 
         xlab = "", ylab = "")
     try({
         par(mar = rep(0.5, 4), mgp = c(2, 1, 0) * 0.5)
@@ -4044,7 +4305,7 @@ function (cluster, network = "all", o.genes = NULL, colors = NULL,
         warning("Trying to plot a cluster with no rows!")
         return()
     }
-    require(igraph)
+    require(igraph0)
     rows <- cluster$rows
     if (is.null(cluster$network)) {
         if (network == "all") 
@@ -4063,7 +4324,7 @@ function (cluster, network = "all", o.genes = NULL, colors = NULL,
     network <- cluster$network
     nrows <- rows
     if (!is.null(o.genes)) 
-        nrows <- c(nrows, o.genes)
+        nrows <- unique(c(nrows, o.genes))
     if (is.null(cluster$cog.code) && "cog.code" %in% names(genome.info)) 
         cluster$cog.code <- genome.info$cog.code[rows]
     if (is.null(cluster$colors)) {
@@ -4147,7 +4408,7 @@ function (cluster, network = "all", o.genes = NULL, colors = NULL,
         curves <- FALSE
     if (!no.legend) {
         labels <- try(get.long.names(get.vertex.attribute(gr, 
-            "name"), short = T), silent = T)
+            "name"), shorter = T), silent = T)
         if (class(labels) == "try-error") 
             labels <- get.vertex.attribute(gr, "name")
         labels[is.na(labels) | labels == ""] <- get.vertex.attribute(gr, 
@@ -4194,7 +4455,7 @@ function (cluster, seqs = cluster$seqs, long.names = T, shade = T,
     k <- cluster$k
     rows <- cluster$rows
     if (!is.null(o.genes)) 
-        rows <- c(rows, o.genes)
+        rows <- unique(c(rows, o.genes))
     motif.out <- NULL
     if (!is.null(seq.type) && seq.type %in% names(cluster)) 
         motif.out <- cluster[[seq.type]]$motif.out
@@ -4203,7 +4464,8 @@ function (cluster, seqs = cluster$seqs, long.names = T, shade = T,
     e.clust <- cluster$e.val
     motif.info <- NULL
     if ((!all(is.na(p.clust)) || !all(is.na(e.clust))) && !is.null(motif.out) && 
-        !is.null(motif.out$pv.ev)) 
+        !is.null(motif.out$pv.ev) && length(motif.out$pv.ev) > 
+        1) 
         motif.info <- subset(motif.out$pv.ev[[2]], gene %in% 
             rows)
     if (is.null(colors) || "cog.code" %in% names(genome.info)) {
@@ -4259,8 +4521,6 @@ function (cluster, seqs = cluster$seqs, long.names = T, shade = T,
         inds <- order(p.values[rows], decreasing = T, na.last = F)
     else if (sort.by == "resid") 
         inds <- order(row.scores[rows, k], decreasing = T)
-    else if (sort.by == "total") 
-        inds <- order(rr.scores[rows, k], decreasing = T)
     if (length(inds) < length(rows)) 
         inds <- c((1:length(rows))[!1:length(rows) %in% inds], 
             inds)
@@ -4509,19 +4769,31 @@ function (cluster, seqs = cluster$seqs, long.names = T, shade = T,
 plotScores <-
 function (k, o.genes = NULL, b.genes = NULL, recompute = F) 
 {
-    row.memb <- apply(row.membership == k, 1, any)
     opar <- par(no.readonly = T)
     rows <- get.rows(k)
-    if (recompute) {
-        tmp <- get.all.scores(k, force.row = T, force.col = T, 
-            force.motif = T, force.net = T)
-        rs <- tmp$r
-        ms <- tmp$m
-        ns <- tmp$n
+    if (recompute || !exists("row.scores") || is.null(row.scores)) {
+        if (attr(get.all.scores, "version") == 1) {
+            tmp <- get.all.scores(k, force.row = T, force.col = T, 
+                force.motif = T, force.net = T)
+            rs <- tmp$r
+            ms <- tmp$m
+            ns <- tmp$n
+            cs <- tmp$c
+        }
+        else if (attr(get.all.scores, "version") == 2) {
+            tmp <- get.old.scores.matrices(k)
+            rs <- tmp$r[, 1]
+            ms <- tmp$m[, 1]
+            ns <- tmp$n[, 1]
+            if (all(is.na(ms)) || all(ms == ms[1])) 
+                rm(ms)
+            if (all(is.na(ns)) || all(ns == ns[1])) 
+                rm(ns)
+        }
     }
     tmp.scale <- round(attr(ratios, "nrow")/length(rows)/4)
     layout(matrix(c(1, 2, 3, 4, 4, 5, 4, 4, 6), 3, 3, byrow = T))
-    if (!recompute) 
+    if (!exists("rs")) 
         rs <- row.scores[, k, drop = T]
     rs[rs < -220] <- min(rs[rs > -220], na.rm = T)
     h <- try(hist(rs, breaks = 20, main = paste("Cluster", k), 
@@ -4531,11 +4803,9 @@ function (k, o.genes = NULL, b.genes = NULL, recompute = F)
             col = "red", border = "red", add = T), silent = T)
         try(hist(rs, breaks = h$breaks, add = T), silent = T)
     }
-    if (!recompute) 
-        ms <- ns <- NULL
-    if (!is.null(mot.scores) && !all(is.na(mot.scores[, k])) && 
-        !no.genome.info) {
-        if (!recompute) 
+    if (exists("ms") || (!is.null(mot.scores) && !all(is.na(mot.scores[, 
+        k])) && !no.genome.info)) {
+        if (!exists("ms")) 
             ms <- mot.scores[, k, drop = T]
         ms[ms < -20] <- min(ms[ms > -20], na.rm = T)
         h <- try(hist(ms, breaks = 20, main = NULL, xlab = "Motif scores"), 
@@ -4546,13 +4816,18 @@ function (k, o.genes = NULL, b.genes = NULL, recompute = F)
             try(hist(ms, breaks = h$breaks, add = T), silent = T)
         }
     }
-    else plot(1, 1, typ = "n", axes = F, xaxt = "n", yaxt = "n", 
-        xlab = "", ylab = "")
-    if (!is.null(net.scores) && !all(net.scores[, k] == 0)) {
-        if (!recompute) 
+    else {
+        ms <- NULL
+        plot(1, 1, type = "n", axes = F, xaxt = "n", yaxt = "n", 
+            xlab = "", ylab = "")
+    }
+    if (exists("ns") || (!is.null(net.scores) && !all(net.scores[, 
+        k] == 0))) {
+        if (!exists("ns")) {
             ns <- net.scores[, k, drop = T]
-        ns[ns < -20] <- min(ns[ns > -20], na.rm = T)
-        ns <- -log10(-ns)
+            ns[ns < -20] <- min(ns[ns > -20], na.rm = T)
+            ns <- -log10(-ns)
+        }
         ns[is.infinite(ns)] <- max(ns[!is.infinite(ns)], na.rm = T) + 
             0.1
         h <- try(hist(ns, breaks = 20, main = NULL, xlab = "-log10(-Network scores)"), 
@@ -4563,22 +4838,26 @@ function (k, o.genes = NULL, b.genes = NULL, recompute = F)
             try(hist(ns, breaks = h$breaks, add = T), silent = T)
         }
     }
-    else plot(1, 1, typ = "n", axes = F, xaxt = "n", yaxt = "n", 
-        xlab = "", ylab = "")
+    else {
+        ns <= NULL
+        plot(1, 1, type = "n", axes = F, xaxt = "n", yaxt = "n", 
+            xlab = "", ylab = "")
+    }
+    row.memb <- attr(ratios, "rnames") %in% rows
     if (!is.null(ms) && !all(is.na(ms)) && !all(ns == 0)) {
-        plot(rs, ms, typ = "n", main = paste("Cluster", k), xlab = "Ratios scores", 
+        plot(rs, ms, type = "n", main = paste("Cluster", k), xlab = "Ratios scores", 
             ylab = "Mot scores")
         text(rs, ms, label = 1:length(rs), col = row.memb + 1, 
             cex = 0.5)
     }
     else if (!is.null(ns) && !all(ns == 0)) {
-        plot(rs, ns, typ = "n", main = paste("Cluster", k), xlab = "Ratios scores", 
+        plot(rs, ns, type = "n", main = paste("Cluster", k), xlab = "Ratios scores", 
             ylab = "Net scores")
         text(rs, ns, label = 1:length(rs), col = row.memb + 1, 
             cex = 0.5)
     }
     else {
-        plot(rs, jitter(rep(0, length(rs))), typ = "n", main = paste("Cluster", 
+        plot(rs, jitter(rep(0, length(rs))), type = "n", main = paste("Cluster", 
             k), xlab = "Ratios scores", ylab = "")
         text(rs, jitter(rep(0, length(rs))), label = 1:length(rs), 
             col = row.memb + 1, cex = 0.5)
@@ -4590,7 +4869,11 @@ function (k, o.genes = NULL, b.genes = NULL, recompute = F)
         text(rs[b.genes], ms[b.genes], label = which(attr(ratios, 
             "rnames") %in% b.genes), col = "blue", cex = 0.5)
     try({
-        rr <- get.density.scores(ks = k, plot = "rows")$r
+        tmp <- get.combined.scores(quantile.normalize = T)
+        r.scores <- tmp$r
+        c.scores <- tmp$c
+        rr <- get.density.scores(ks = k, r.scores, c.scores, 
+            plot = "rows")$r
         rr <- rr[, k, drop = T]
         h <- try(hist(log10(rr), breaks = 50, main = NULL, xlab = "Density (membership) scores"), 
             silent = T)
@@ -4607,11 +4890,39 @@ plotStats <-
 function (iter = stats$iter[nrow(stats)], plot.clust = NA, new.dev = F, 
     ...) 
 {
-    if (!exists("row.memb")) 
-        row.memb <- t(apply(row.membership[], 1, function(i) 1:k.clust %in% 
-            i))
+    if (!exists("row.memb")) {
+        row.memb <- sapply(1:k.clust, function(k) attr(ratios, 
+            "rnames") %in% get.rows(k))
+        if (is.vector(row.memb)) 
+            row.memb <- t(row.memb)
+        rownames(row.memb) <- attr(ratios, "rnames")
+        col.memb <- sapply(1:k.clust, function(k) attr(ratios, 
+            "cnames") %in% get.cols(k))
+        if (is.vector(col.memb)) 
+            col.memb <- t(col.memb)
+        rownames(col.memb) <- attr(ratios, "cnames")
+    }
+    if (!exists("row.scores") || is.null(row.scores)) {
+        if (attr(get.all.scores, "version") == 1) {
+            tmp <- get.all.scores()
+            row.scores <- tmp$r
+            mot.scores <- tmp$m
+            net.scores <- tmp$n
+            col.scores <- tmp$c
+            tmp <- get.combined.scores(quantile.normalize = T)
+            r.scores <- tmp$r
+            c.scores <- tmp$c
+        }
+        else if (attr(get.all.scores, "version") == 2) {
+            tmp <- get.old.scores.matrices()
+            row.scores <- tmp$r
+            mot.scores <- tmp$m
+            net.scores <- tmp$n
+            col.scores <- tmp$c
+        }
+    }
     opar <- par(no.readonly = T)
-    tmp.scale <- round(1/mean(row.memb[, ], na.rm = T)/4)
+    tmp.scale <- round(1/mean(row.memb, na.rm = T)/4)
     if (new.dev) {
         if (length(dev.list()) < 1) 
             dev.new()
@@ -4622,40 +4933,45 @@ function (iter = stats$iter[nrow(stats)], plot.clust = NA, new.dev = F,
     par(mar = c(3, 3, 2, 0.1), mgp = c(3, 1, 0) * 0.5)
     stats <- stats[stats[, "iter"] <= iter, , drop = F]
     try(matplot(stats[, "iter"], stats[, grep("resid", colnames(stats), 
-        val = T)], typ = "l", xlab = "iter", ylab = "Mean resid", 
+        value = T)], type = "l", xlab = "iter", ylab = "Mean resid", 
         main = sprintf("Iter: %d", iter), lty = 1), silent = T)
     sapply(c(51, 101, 21), function(kwin) try(matlines(stats[, 
         "iter"], apply(stats[, grep("resid", colnames(stats), 
-        val = T), drop = F], 2, function(i) runmed(i, k = min(length(i), 
+        value = T), drop = F], 2, function(i) runmed(i, k = min(length(i), 
         kwin))), lty = 2, lwd = 0.6), silent = T))
     if ((nn <- length(grep("resid", colnames(stats)))) > 1) 
         legend("bottomleft", legend = gsub("resid.", "", grep("resid", 
-            colnames(stats), val = T)), lwd = 1, bty = "n", col = 1:nn, 
+            colnames(stats), value = T)), lwd = 1, bty = "n", col = 1:nn, 
             lty = 1:nn, cex = 0.5)
-    rs <- row.scores[]
-    rs[rs < -20] <- min(rs[rs > -20], na.rm = T)
-    h <- try(hist(rs, breaks = 50, main = NULL, xlab = "Ratios scores"), 
-        silent = T)
-    if (class(h) != "try-error") {
-        try(hist(rep(rs[row.memb[, ] == 1], tmp.scale), breaks = h$breaks, 
-            col = "red", border = "red", add = T), silent = T)
-        try(hist(rs, breaks = h$breaks, add = T), silent = T)
+    if (exists("row.scores") && !is.null(mot.scores) && !all(is.na(mot.scores[, 
+        ]))) {
+        rs <- row.scores[]
+        rs[rs < -20] <- min(rs[rs > -20], na.rm = T)
+        h <- try(hist(rs, breaks = 50, main = NULL, xlab = "Ratios scores"), 
+            silent = T)
+        if (class(h) != "try-error") {
+            try(hist(rep(rs[row.memb == 1], tmp.scale), breaks = h$breaks, 
+                col = "red", border = "red", add = T), silent = T)
+            try(hist(rs, breaks = h$breaks, add = T), silent = T)
+        }
     }
-    if (!is.null(mot.scores) && !all(is.na(mot.scores[, ]))) {
+    if (exists("mot.scores") && !is.null(mot.scores) && !all(is.na(mot.scores[, 
+        ]))) {
         ms <- mot.scores[, ]
         ms[ms < -20] <- min(ms[ms > -20], na.rm = T)
         ms[ms >= 0] <- NA
         h <- try(hist(ms, breaks = 50, main = NULL, xlab = "Motif scores"), 
             silent = T)
         if (class(h) != "try-error") {
-            try(hist(rep(ms[row.memb[, ] == 1], tmp.scale * 3), 
-                breaks = h$breaks, col = "red", border = "red", 
-                add = T), silent = T)
+            try(hist(rep(ms[row.memb == 1], tmp.scale * 3), breaks = h$breaks, 
+                col = "red", border = "red", add = T), silent = T)
             try(hist(ms, breaks = h$breaks, add = T), silent = T)
         }
-        tmp <- stats[, grep("p.clust", colnames(stats), val = T), 
-            drop = F]
-        try(matplot(stats[, "iter"], tmp, typ = "l", xlab = "iter", 
+    }
+    tmp <- stats[, grep("p.clust", colnames(stats), value = T), 
+        drop = F]
+    if (!all(is.na(tmp))) {
+        try(matplot(stats[, "iter"], tmp, type = "l", xlab = "iter", 
             ylab = "Mean motif p-value", main = sprintf("Motif scaling: %.3f", 
                 mot.scaling[max(1, iter - 1)]), lty = 1), silent = T)
         sapply(c(51, 101, 21), function(kwin) try(matlines(stats[!is.na(tmp), 
@@ -4665,10 +4981,11 @@ function (iter = stats$iter[nrow(stats)], plot.clust = NA, new.dev = F,
         if ((nn <- length(grep("p.clust", colnames(stats)))) > 
             1) 
             legend("bottomleft", legend = gsub("p.clust.", "", 
-                grep("p.clust", colnames(stats), val = T)), lwd = 1, 
+                grep("p.clust", colnames(stats), value = T)), lwd = 1, 
                 bty = "n", col = 1:nn, lty = 1:nn, cex = 0.5)
     }
-    if (!is.null(net.scores) && !all(net.scores[, ] == 0)) {
+    if (exists("net.scores") && !is.null(net.scores) && !all(net.scores[, 
+        ] == 0)) {
         ns <- net.scores[, ]
         ns[ns < -20] <- min(ns[ns > -20], na.rm = T)
         ns[ns >= 0] <- NA
@@ -4677,13 +4994,13 @@ function (iter = stats$iter[nrow(stats)], plot.clust = NA, new.dev = F,
         h <- try(hist(ns, breaks = 50, main = NULL, xlab = "-log10(-Network scores)"), 
             silent = T)
         if (class(h) != "try-error") {
-            try(hist(rep(ns[row.memb[, ] == 1], tmp.scale), breaks = h$breaks, 
+            try(hist(rep(ns[row.memb == 1], tmp.scale), breaks = h$breaks, 
                 col = "red", border = "red", add = T), silent = T)
             try(hist(ns, breaks = h$breaks, add = T), silent = T)
         }
-        tmp <- stats[, grep("net.", colnames(stats), val = T, 
+        tmp <- stats[, grep("net.", colnames(stats), value = T, 
             fixed = T), drop = F]
-        try(matplot(stats[, "iter"], tmp, typ = "l", xlab = "iter", 
+        try(matplot(stats[, "iter"], tmp, type = "l", xlab = "iter", 
             ylab = "Mean net-score", main = sprintf("Net scaling: %.3f", 
                 net.scaling[max(1, iter - 1)]), lty = 1), silent = T)
         try(matlines(stats[, "iter"], apply(tmp, 2, function(i) runmed(i[!is.na(i)], 
@@ -4691,18 +5008,26 @@ function (iter = stats$iter[nrow(stats)], plot.clust = NA, new.dev = F,
             silent = T)
         if ((nn <- length(grep("net.", colnames(stats)))) > 1) 
             try(legend("bottomleft", legend = gsub("net.", "", 
-                grep("net.", colnames(stats), val = T)), lwd = 1, 
+                grep("net.", colnames(stats), value = T)), lwd = 1, 
                 bty = "n", col = 1:nn, lty = 1:nn, cex = 0.5), 
                 silent = T)
     }
     clusterStack <- get.clusterStack(ks = 1:k.clust)
     resids <- sapply(as.list(clusterStack), "[[", "resid")
     try(hist(resids[resids <= 1.5], main = NULL, xlab = "Cluster Residuals", 
-        xlim = if (all(resids > 0)) 
+        xlim = if (all(resids > 0, na.rm = T)) 
             c(0, 1.5)
         else range(resids, na.rm = T), breaks = k.clust/4), silent = T)
-    if (!is.null(mot.scores) && !all(is.na(mot.scores[, ])) && 
-        !all(mot.scores[, ] == 0)) {
+    if (!exists("mot.scores") || is.null(mot.scores) || all(is.na(mot.scores[, 
+        ]))) {
+        pclusts <- sapply(as.list(clusterStack), "[[", "p.clust")
+        try(hist(pclusts[pclusts <= 1], main = NULL, xlab = "Cluster Motif P-values", 
+            xlim = if (all(pclusts > 0, na.rm = T)) 
+                c(0, 1)
+            else range(pclusts, na.rm = T), breaks = k.clust/4), 
+            silent = T)
+    }
+    if (mot.scaling[iter] > 0) {
         plot.all.clusterMotifPositions <- function(ks = 1:k.clust, 
             mots = 1, e.cutoff = 1, p.cutoff = 0.05, seq.type = names(mot.weights)[1], 
             breaks = 100, ...) {
@@ -4746,12 +5071,18 @@ function (iter = stats$iter[nrow(stats)], plot.clust = NA, new.dev = F,
             try(plot.all.clusterMotifPositions(mots = 2, main = "Positions of motif #2", 
                 ...), silent = T)
     }
-    n.rows <- tabulate(unlist(apply(row.membership, 1, unique)))
+    n.rows <- sapply(1:k.clust, function(k) length(get.rows(k)))
     try(hist(n.rows, main = NULL, xlab = "Cluster Nrows", breaks = k.clust/4, 
         xlim = c(-5, max(n.rows, na.rm = T))), silent = T)
-    n.cols <- tabulate(unlist(apply(col.membership, 1, unique)))
+    n.cols <- sapply(1:k.clust, function(k) length(get.cols(k)))
     try(hist(n.cols, main = NULL, xlab = "Cluster Ncols", breaks = k.clust/4, 
         xlim = c(-5, attr(ratios, "ncol"))), silent = T)
+    nr <- table(unlist(sapply(clusterStack, "[[", "rows")))
+    if (length(nr) < attr(ratios, "nrow")) 
+        nr <- c(nr, rep(0, attr(ratios, "nrow") - length(nr) + 
+            1))
+    try(hist(nr, breaks = seq(-0.5, max(nr, na.rm = T) + 0.5, 
+        by = 1), main = NULL, xlab = "NClust per gene"), silent = T)
     if (!is.na(plot.clust)) {
         if (new.dev) {
             if (length(dev.list()) < 2) 
@@ -4832,7 +5163,7 @@ function (scores, weights = NULL, keep.nas = F)
     rm(tmp2)
     out <- list()
     for (n in names(scores)) {
-        tmp <- rank(scores[[n]][, ], ties = "min", na = "keep")
+        tmp <- rank(scores[[n]][, ], ties.method = "min", na.last = "keep")
         z <- matrix(tmp2.mn[tmp], nrow = d[1], ncol = d[2])
         dimnames(z) <- dn
         if (keep.nas) 
@@ -4870,7 +5201,7 @@ function (seqs, length = 8, entropy.cutoff = 0.6, repl = "N",
             "-maxw") + 1])
         seqs <- seqs[nchar(seqs) >= max.width]
         if (length(seqs) > 0) {
-            fname <- my.tempfile("dust", suf = ".fst")
+            fname <- my.tempfile("dust", suffix = ".fst")
             write.fasta(seqs, fname)
             cmd <- gsub("$fname", fname, dust.cmd, fixed = T)
             fst <- system.time.limit(paste(cmd, "2>/dev/null"), 
@@ -4889,16 +5220,48 @@ function (seqs)
     sapply(seqs, function(seq) paste(rev(strsplit(toupper(chartr("ATCG", 
         "tagc", seq)), "")[[1]]), collapse = ""))
 }
+row.col.membership.from.clusterStack <-
+function (cs) 
+{
+    row.memb <- col.memb <- NULL
+    for (k in 1:length(cs)) {
+        row.memb <- cbind(row.memb, rep(0, attr(ratios, "nrow")))
+        if (ncol(row.memb) == 1) 
+            rownames(row.memb) <- attr(ratios, "rnames")
+        rows <- cs[[k]]$rows
+        rows <- rows[!is.na(rows)]
+        row.memb[rows, k] <- k
+        col.memb <- cbind(col.memb, rep(0, attr(ratios, "ncol")))
+        if (ncol(col.memb) == 1) 
+            rownames(col.memb) <- attr(ratios, "cnames")
+        cols <- cs[[k]]$cols
+        cols <- cols[!is.na(cols)]
+        col.memb[cols, k] <- k
+    }
+    row.memb <- t(apply(row.memb, 1, function(i) c(i[i != 0], 
+        i[i == 0])))
+    row.memb <- row.memb[, apply(row.memb, 2, sum) != 0, drop = F]
+    colnames(row.memb) <- NULL
+    col.memb <- t(apply(col.memb, 1, function(i) c(i[i != 0], 
+        i[i == 0])))
+    col.memb <- col.memb[, apply(col.memb, 2, sum) != 0, drop = F]
+    colnames(col.memb) <- NULL
+    if (ncol(row.memb) < n.clust.per.row) 
+        row.memb <- cbind(row.memb, rep(0, nrow(row.memb)))
+    if (ncol(col.memb) < n.clust.per.col) 
+        col.memb <- cbind(col.memb, rep(0, nrow(col.memb)))
+    list(r = row.memb, c = col.memb)
+}
 runMast <-
 function (memeOut, mast.cmd, genes, seqs, bgseqs = NULL, bg.list = NULL, 
     bgfname = NULL, unlink = T, verbose = F, ...) 
 {
-    fname <- my.tempfile("mast.tmp", suf = ".fst")
+    fname <- my.tempfile("mast.tmp", suffix = ".fst")
     if (is.null(bgfname)) {
-        bgfname <- my.tempfile("mast.tmp", suf = ".bg")
+        bgfname <- my.tempfile("mast.tmp", suffix = ".bg")
         on.exit(unlink(bgfname))
     }
-    memeOutFname <- my.tempfile("meme.tmp", suf = ".out")
+    memeOutFname <- my.tempfile("meme.tmp", suffix = ".out")
     cat(memeOut, sep = "\n", file = memeOutFname)
     tmp <- mkTempMemeFiles(genes, seqs, fname = fname, bgseqs = bgseqs, 
         bg.list = bg.list, bgfname = bgfname, seq.weights = NULL, 
@@ -4925,9 +5288,9 @@ function (sgenes, seqs, cmd = meme.cmd[names(mot.weights)[1]],
     unlink = T, verbose = T, seq.weights = NULL, psps = NULL, 
     ...) 
 {
-    fname <- my.tempfile("meme.tmp", suf = ".fst")
+    fname <- my.tempfile("meme.tmp", suffix = ".fst")
     if (is.null(bgfname)) {
-        bgfname <- my.tempfile("meme.tmp", suf = ".bg")
+        bgfname <- my.tempfile("meme.tmp", suffix = ".bg")
         on.exit(unlink(bgfname))
     }
     tmp <- mkTempMemeFiles(sgenes, seqs, fname = fname, bgseqs = bgseqs, 
@@ -4952,10 +5315,10 @@ function (sgenes, seqs, cmd = meme.cmd[names(mot.weights)[1]],
     return(output)
 }
 save.cmonkey.env <-
-function (env = NULL, file = NULL, verbose = T) 
+function (envir = NULL, file = NULL, verbose = T) 
 {
     if (is.null(env)) {
-        for (i in ls(env = globalenv())) if (is.environment(get(i, 
+        for (i in ls(envir = globalenv())) if (is.environment(get(i, 
             globalenv())) && "cmonkey" %in% class(get(i, globalenv()))) 
             save.cmonkey.env(get(i, globalenv()), file, verbose)
         return(invisible())
@@ -4978,14 +5341,13 @@ function (k.clust, seed.method = "rnd", col.method = "rnd")
         seed.method <- "kmeans"
     }
     if (seed.method == "rnd") {
-        row.membership <- t(sapply(1:attr(ratios, "nrow"), function(i) sample(1:k.clust, 
+        rm <- t(sapply(1:attr(ratios, "nrow"), function(i) sample(1:k.clust, 
             n.clust.per.row[1], replace = n.clust.per.row[1] > 
                 attr(ratios, "nrow"))))
     }
     else if (substr(seed.method, 1, 5) == "list=") {
-        row.membership <- matrix(0, nrow = attr(ratios, "nrow"), 
-            ncol = n.clust.per.row[1])
-        rownames(row.membership) <- attr(ratios, "rnames")
+        rm <- matrix(0, nrow = attr(ratios, "nrow"), ncol = n.clust.per.row[1])
+        rownames(rm) <- attr(ratios, "rnames")
         fname <- strsplit(seed.method, "=")[[1]][2]
         if (exists(fname)) 
             lists <- get(fname)
@@ -4994,36 +5356,32 @@ function (k.clust, seed.method = "rnd", col.method = "rnd")
                 perl = T)
         for (k in 1:min(c(k.clust, length(lists)))) {
             probes <- unlist(lapply(get.synonyms(lists[[k]]), 
-                function(i) i %in% rownames(row.membership)))
-            row.membership[probes[row.membership[probes, 1] == 
-                0], 1] <- k
-            row.membership[probes[row.membership[probes, 1] != 
-                0], 2] <- k
+                function(i) i %in% rownames(rm)))
+            rm[probes[rm[probes, 1] == 0], 1] <- k
+            rm[probes[rm[probes, 1] != 0], 2] <- k
         }
         if (length(lists) < k.clust) {
             for (k in (length(lists) + 1):k.clust) {
                 rnames <- attr(ratios, "rnames")[!attr(ratios, 
                   "rnames") %in% unlist(lists)]
                 rows <- sample(rnames, 5)
-                row.membership[rows[row.membership[rows, 1] == 
-                  0], 1] <- k
-                row.membership[rows[row.membership[rows, 1] != 
-                  0 & row.membership[rows, 2] == 0], 2] <- k
+                rm[rows[rm[rows, 1] == 0], 1] <- k
+                rm[rows[rm[rows, 1] != 0 & rm[rows, 2] == 0], 
+                  2] <- k
             }
         }
     }
     else if (substr(seed.method, 1, 4) == "rnd=") {
         n.samp <- as.integer(strsplit(seed.method, "=")[[1]][2])
-        row.membership <- matrix(0, nrow = attr(ratios, "nrow"), 
-            ncol = n.clust.per.row[1])
-        rownames(row.membership) <- attr(ratios, "rnames")
+        rm <- matrix(0, nrow = attr(ratios, "nrow"), ncol = n.clust.per.row[1])
+        rownames(rm) <- attr(ratios, "rnames")
         for (i in 1:n.clust.per.row) {
             sampled <- rep(FALSE, attr(ratios, "nrow"))
             names(sampled) <- attr(ratios, "rnames")
             for (k in 1:k.clust) {
                 g <- sample(attr(ratios, "rnames")[!sampled], 
                   n.samp)
-                row.membership[g, 1] <- k
+                rm[g, 1] <- k
                 sampled[g] <- TRUE
             }
         }
@@ -5034,20 +5392,19 @@ function (k.clust, seed.method = "rnd", col.method = "rnd")
         tmp.rat <- get.cluster.matrix()
         tmp.rat[is.na(tmp.rat)] <- 0
         km <- kmeans
-        row.membership <- km(tmp.rat, centers = k.clust, iter.max = 20, 
-            nstart = 2)$cluster
-        names(row.membership) <- attr(ratios, "rnames")
+        rm <- km(tmp.rat, centers = k.clust, iter.max = 20, nstart = 2)$cluster
+        names(rm) <- attr(ratios, "rnames")
         if (n.clust.per.row[1] > 1) 
-            row.membership <- cbind(row.membership, matrix(rep(0, 
-                attr(ratios, "nrow") * (n.clust.per.row[1] - 
-                  1)), ncol = n.clust.per.row[1] - 1))
+            rm <- cbind(rm, matrix(rep(0, attr(ratios, "nrow") * 
+                (n.clust.per.row[1] - 1)), ncol = n.clust.per.row[1] - 
+                1))
     }
-    if (is.vector(row.membership)) 
-        row.membership <- t(row.membership)
-    if (nrow(row.membership) == 1) 
-        row.membership <- t(row.membership)
+    if (is.vector(rm)) 
+        rm <- t(rm)
+    if (nrow(rm) == 1) 
+        rm <- t(rm)
     if (col.method == "rnd") {
-        col.membership <- t(sapply(1:attr(ratios, "ncol"), function(i) sample(1:k.clust, 
+        cm <- t(sapply(1:attr(ratios, "ncol"), function(i) sample(1:k.clust, 
             n.clust.per.col[1], replace = n.clust.per.col[1] > 
                 k.clust)))
     }
@@ -5057,20 +5414,19 @@ function (k.clust, seed.method = "rnd", col.method = "rnd")
         all.rats <- get.cluster.matrix()
         attr(all.rats, "all.colVars") <- apply(all.rats, 2, var, 
             use = "pair", na.rm = T)
-        col.scores <- -sapply(1:k.clust, function(k) if (sum(row.membership == 
+        col.scores <- -sapply(1:k.clust, function(k) if (sum(rm == 
             k, na.rm = T) <= 0) 
             rep(NA, attr(ratios, "ncol"))
-        else get.col.scores(k = get.rows(k, row.membership), 
+        else get.col.scores(k = rownames(which(rm == k, arr.ind = T)), 
             ratios = all.rats, method = "orig"))
-        col.membership <- t(apply(col.scores, 1, function(i) order(i, 
-            decreasing = T)[1:n.clust.per.col[1]]))
+        cm <- t(apply(col.scores, 1, function(i) order(i, decreasing = T)[1:n.clust.per.col[1]]))
     }
-    rownames(row.membership) <- attr(ratios, "rnames")
-    rownames(col.membership) <- attr(ratios, "cnames")
-    list(row.membership = row.membership, col.membership = col.membership)
+    rownames(rm) <- attr(ratios, "rnames")
+    rownames(cm) <- attr(ratios, "cnames")
+    list(rm = rm, cm = cm)
 }
 set.param <-
-function (name, val, env = cmonkey.params, override = F, quiet = F) 
+function (name, val, envir = cmonkey.params, override = F, quiet = F) 
 {
     if (!exists(name, envir = env) || override) {
         if (!quiet) 
@@ -5097,9 +5453,119 @@ function (cmd, tlimit = 600)
     out <- readLines(pipe(cmd, open = "rt"))
     out
 }
+update.all.clusters <-
+function (env, dont.update = F, ...) 
+{
+    tmp <- env$row.col.membership.from.clusterStack(env$clusterStack)
+    row.membership <- tmp$r
+    col.membership <- tmp$c
+    tmp <- get.all.scores(...)
+    env$row.scores <- tmp$r
+    env$mot.scores <- tmp$m
+    env$net.scores <- tmp$n
+    env$col.scores <- tmp$c
+    env$meme.scores <- tmp$ms
+    if (!is.null(tmp$cns)) 
+        env$cluster.net.scores <- tmp$cns
+    tmp <- get.combined.scores(quantile.normalize = F)
+    r.scores <- tmp$r
+    c.scores <- tmp$c
+    if (length(tmp$scalings) > 0) {
+        env$row.scaling[iter] <- tmp$scalings["row"]
+        env$mot.scaling[iter] <- tmp$scalings["mot"]
+        env$net.scaling[iter] <- tmp$scalings["net"]
+    }
+    rm(tmp)
+    row.memb <- sapply(1:k.clust, function(k) attr(ratios, "rnames") %in% 
+        get.rows(k))
+    if (is.vector(row.memb)) 
+        row.memb <- t(row.memb)
+    rownames(row.memb) <- attr(ratios, "rnames")
+    col.memb <- sapply(1:k.clust, function(k) attr(ratios, "cnames") %in% 
+        get.cols(k))
+    if (is.vector(col.memb)) 
+        col.memb <- t(col.memb)
+    rownames(col.memb) <- attr(ratios, "cnames")
+    if (row.scaling[iter] > 0 && fuzzy.index[iter] > 1e-05) {
+        r.scores[, ] <- r.scores[, ] + rnorm(length(r.scores[, 
+            ]), sd = sd(r.scores[, ][row.memb[, ] == 1], na.rm = T) * 
+            fuzzy.index[iter])
+        if (!is.null(c.scores)) 
+            c.scores[, ] <- c.scores[, ] + rnorm(length(c.scores[, 
+                ]), sd = sd(c.scores[, ][col.memb[, ] == 1], 
+                na.rm = T) * fuzzy.index[iter])
+    }
+    tmp <- get.density.scores(ks = 1:k.clust, r.scores, col.scores)
+    rr.scores <- tmp$r
+    cc.scores <- tmp$c
+    rm(tmp)
+    size.compensation.func.rows <- function(n) exp(-n/(attr(ratios, 
+        "nrow") * n.clust.per.row/k.clust))
+    size.compensation.func.cols <- function(n) exp(-n/(attr(ratios, 
+        "ncol") * n.clust.per.col/k.clust))
+    for (k in 1:k.clust) {
+        tmp <- sum(row.memb[, k])
+        rr.scores[, k] <- rr.scores[, k] * size.compensation.func.rows(max(tmp, 
+            cluster.rows.allowed[1]))
+        if (!is.null(cc.scores)) {
+            tmp <- sum(col.memb[, k])
+            cc.scores[, k] <- cc.scores[, k] * size.compensation.func.cols(max(tmp, 
+                attr(ratios, "ncol")/10))
+        }
+    }
+    tmp <- get.updated.memberships(row.membership, col.membership, 
+        rr.scores, cc.scores)
+    row.membership <- tmp$r
+    col.membership <- tmp$c
+    rm(tmp)
+    if (env$post.adjust == TRUE && env$iter == env$n.iter) {
+        env$adjust.all.clusters(env, expand.only = F)
+        gc()
+    }
+    if (!dont.update) {
+        env$clusterStack <- lapply(1:env$k.clust, function(k) list(rows = rownames(which(row.membership == 
+            k, arr.ind = T)), cols = rownames(which(col.membership == 
+            k, arr.ind = T))))
+        env$clusterStack <- env$get.clusterStack(ks = 1:k.clust)
+    }
+    env
+}
+update.cmonkey.env <-
+function (object, ...) 
+{
+    if (file.exists("cmonkey-funcs.R")) {
+        tmp.e <- new.env()
+        sys.source("cmonkey.R", envir = tmp.e)
+    }
+    else {
+        tmp.e <- environment(cMonkey:::cmonkey)
+    }
+    for (i in ls(tmp.e)) {
+        if (i %in% c("DATE", "VERSION")) 
+            next
+        f <- try(get(i, envir = tmp.e))
+        f2 <- try(get(paste("super", i, sep = "."), envir = object), 
+            silent = T)
+        if (class(f) == "function") {
+            environment(f) <- object
+            if (class(f2) != "function") 
+                assign(i, f)
+            else assign(paste("super", i, sep = "."), f)
+        }
+    }
+    rm(f, f2, tmp.e, i)
+    for (i in ls()) {
+        if (i %in% c("i", "object")) 
+            next
+        f <- get(i)
+        if (is.function(f)) 
+            assign(i, f, object)
+    }
+}
 viewPssm <-
-function (pssm, e.val = NA, mot.ind = NA, use.char = T, main.title = NA, 
-    ...) 
+function (pssm, e.value = NA, mot.ind = NA, use.char = T, main.title = NA, 
+    no.par = F, scale.e = NA, boxes = F, new = T, xoff = 0, yoff = 0, 
+    no.axis.labels = F, ...) 
 {
     if (is.null(pssm)) 
         return()
@@ -5125,26 +5591,42 @@ function (pssm, e.val = NA, mot.ind = NA, use.char = T, main.title = NA,
             0.7, 0.9, 1, 1, 0.9, 0.65, 0.35, 0.1, 0, 0, 0.1, 
             0.35, 0.5, 0.5, 0.4, 0.4, 0.2, 0.1, 0.1, 0.2, 0.42, 
             0.58, 0.8, 0.9, 0.9, 0.8, 0.65, 0.6), color = "orange"))
-    draw.char <- function(char = col.let, rect = c(0, 0, 1, 1)) {
+    draw.char <- function(char = col.let, rect = c(0, 0, 1, 1), 
+        border = NULL, ...) {
         if (rect[4] <= 1e-05) 
             return()
         x <- char.coords[[char]]$x * rect[3] + rect[1]
         y <- char.coords[[char]]$y * rect[4] + rect[2]
         color <- char.coords[[char]]$color
-        polygon(x, y, col = color, border = color)
+        if (is.null(border)) 
+            border <- color
+        if (!boxes) {
+            polygon(x + xoff, y + yoff, col = color, border = border, 
+                density = NA, ...)
+        }
+        else {
+            rect[1] <- rect[1] + xoff
+            rect[2] <- rect[2] + yoff
+            rect(rect[1], rect[2], rect[1] + rect[3], rect[2] + 
+                rect[4], col = color, border = border, density = NA, 
+                ...)
+        }
     }
     win.size <- nrow(pssm)
-    par(mar = rep(0.5, 4) + 0.1, mgp = c(3, 1, 0) * 0.75)
+    if (!no.par) 
+        par(mar = rep(0.5, 4) + 0.1, mgp = c(3, 1, 0) * 0.75)
     if (any(pssm <= 0)) 
         pssm <- pssm + 1e-10
     if (any(pssm > 1)) 
         pssm <- t(apply(pssm, 1, function(i) i/(sum(i) + 1e-10)))
     entr <- getEntropy(pssm)
-    scale.e <- (2 - entr)/2
+    if (is.na(scale.e)) 
+        scale.e <- (2 - entr)/2
     x.range <- c(0.5, win.size + 0.5)
-    y.range <- c(0, 1)
-    plot(x.range, y.range, type = "n", tck = 0.01, cex.lab = 0.2, 
-        cex.sub = 0.2, cex.axis = 0.2, axes = F)
+    y.range <- c(0, max(scale.e))
+    if (new) 
+        plot(x.range, y.range, type = "n", tck = 0.01, cex.lab = 0.2, 
+            cex.sub = 0.2, cex.axis = 0.2, axes = F)
     if (!is.na(main.title[1])) {
         if (!is.na(mot.ind)) 
             title(main.title, col.main = mot.ind + 1, xpd = NA, 
@@ -5176,7 +5658,7 @@ function (pssm, e.val = NA, mot.ind = NA, use.char = T, main.title = NA,
                 }
                 else {
                   draw.char(col.let[ind], c((j - 0.4), 0, 0.9, 
-                    pssm.sc[j, ind] - 0.01))
+                    pssm.sc[j, ind] - 0.01), ...)
                 }
                 prev.h <- pssm.sc[j, ind]
             }
@@ -5194,21 +5676,27 @@ function (pssm, e.val = NA, mot.ind = NA, use.char = T, main.title = NA,
                 }
                 else {
                   draw.char(col.let[ind], c((j - 0.4), prev.h, 
-                    0.9, pssm.sc[j, ind] - 0.01))
+                    0.9, pssm.sc[j, ind] - 0.01), ...)
                 }
                 prev.h <- prev.h + pssm.sc[j, ind]
             }
         }
+    }
+    if (!no.axis.labels) {
         if (win.size < 10) 
             text(1:win.size, rep(-0.01, win.size), as.character(1:win.size), 
                 cex = 0.7, adj = c(0.5, 1), xpd = NA)
         else if (win.size < 20) 
             text(seq(1, win.size, 2), rep(-0.01, win.size), as.character(seq(1, 
                 win.size, 2)), cex = 0.7, adj = c(0.5, 1), xpd = NA)
-        else text(seq(1, win.size, 5), rep(-0.01, win.size), 
-            as.character(seq(1, win.size, 5)), cex = 0.7, adj = c(0.5, 
+        else if (win.size < 50) 
+            text(seq(1, win.size, 5), rep(-0.01, win.size), as.character(seq(1, 
+                win.size, 5)), cex = 0.7, adj = c(0.5, 1), xpd = NA)
+        else text(seq(1, win.size, 25), rep(-0.01, win.size), 
+            as.character(seq(1, win.size, 25)), cex = 0.7, adj = c(0.5, 
                 1), xpd = NA)
     }
+    invisible(y.range)
 }
 write.project <-
 function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1, 
@@ -5244,10 +5732,10 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
             plotStats(new.dev = F)
             dev.off()
         }
-        require(igraph)
+        require(igraph0)
         cat("SVGS: ")
         for (qqq in 1:3) {
-            mc$apply(ks, function(k) {
+            lapply(ks, function(k) {
                 if (k%%25 == 0) 
                   cat(k)
                 else cat(".")
@@ -5258,17 +5746,17 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
                 devSVGTips(sprintf("%s/svgs/cluster%04d.svg", 
                   out.dir, k), toolTipMode = 2, title = sprintf("Bicluster %04d", 
                   k), xmlHeader = T)
-                plotClust(k, w.motifs = T, seq.type = seq.type, 
-                  ...)
+                try(plotClust(k, w.motifs = T, seq.type = seq.type, 
+                  ...))
                 dev.off()
             })
         }
         cat("\n")
     }
     if ("pdf" %in% output) {
-        require(igraph)
+        require(igraph0)
         cat("PDFS: ")
-        mc$apply(ks, function(k) {
+        lapply(ks, function(k) {
             if (k%%25 == 0) 
                 cat(k)
             else cat(".")
@@ -5285,7 +5773,7 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
     if (gaggle && "html" %in% output) {
         require(hwriter)
         cat("HTMLS: ")
-        mc$apply(ks, function(k, ...) {
+        lapply(ks, function(k, ...) {
             if (k%%25 == 0) 
                 cat(k)
             else cat(".")
@@ -5295,17 +5783,18 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
             rows <- sort(get.rows(k))
             if (length(rows) <= 0) 
                 return()
-            short.names <- get.long.names(rows, short = T)
+            short.names <- get.long.names(rows, shorter = T)
             short.names <- cbind(rows, short.names)
             rownames(short.names) <- colnames(short.names) <- NULL
-            long.names <- get.long.names(rows, short = F)
+            long.names <- get.long.names(rows, shorter = F)
             long.names <- cbind(rows, long.names)
             rownames(long.names) <- colnames(long.names) <- NULL
             refseq.names <- unique(unlist(get.synonyms(rows)))
-            refseq.names <- grep("^NP_", refseq.names, val = T)
+            refseq.names <- grep("^NP_", refseq.names, value = T)
             upstream.seqs <- try(get.sequences(k, filter = F, 
                 uniq = F), silent = T)
-            if (class(upstream.seqs) == "try-error" || is.null(upstream.seqs)) {
+            if (class(upstream.seqs) == "try-error" || is.null(upstream.seqs) || 
+                length(upstream.seqs) == 0) {
                 upstream.seqs <- rep("", length(rows))
                 names(upstream.seqs) <- rows
             }
@@ -5471,13 +5960,13 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
             cat(htmltext, file = sprintf("%s/htmls/cluster%04d.html", 
                 out.dir, k), sep = "\n")
             rm(htmltext)
-        }, mc.preschedule = F)
+        })
         cat("\n")
     }
     if ("png" %in% output) {
-        mc <- get.parallel(length(ks), para = 1)
+        mc <- get.parallel(length(ks), para.cores = 1)
         cat("PROFILES: ")
-        mc$apply(ks, function(k, ...) {
+        lapply(ks, function(k, ...) {
             if (k%%25 == 0) 
                 cat(k)
             else cat(".")
@@ -5496,8 +5985,8 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
         })
         cat("\n")
         cat("NETWORKS: ")
-        require(igraph)
-        mc$apply(ks, function(k, ...) {
+        require(igraph0)
+        lapply(ks, function(k, ...) {
             if (k%%25 == 0) 
                 cat(k)
             else cat(".")
@@ -5518,7 +6007,7 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
         cat("\n")
         if (!is.null(seq.type)) {
             cat("MOTIFS: ")
-            mc$apply(ks, function(k, ...) {
+            lapply(ks, function(k, ...) {
                 if (k%%25 == 0) 
                   cat(k)
                 else cat(".")
@@ -5541,7 +6030,7 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
                       out.dir, k, pp), width = 128, height = 64, 
                       antialias = "subpixel")
                     if (is.matrix(pssms[[pp]])) 
-                      try(viewPssm(pssms[[pp]], e.val = NA, mot.ind = pp, 
+                      try(viewPssm(pssms[[pp]], e.value = NA, mot.ind = pp, 
                         main.title = sprintf("e=%.3g", e.vals[[pp]]), 
                         cex.main = 0.7), silent = T)
                     dev.off()
@@ -5550,7 +6039,7 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
             })
             cat("\n")
             cat("MOTIF POSITIONS: ")
-            mc$apply(ks, function(k, ...) {
+            lapply(ks, function(k, ...) {
                 if (k%%25 == 0) 
                   cat(k)
                 else cat(".")
@@ -5615,23 +6104,33 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
             as.integer(rownames(cluster.summ))), table = F)
         if (!is.null(seq.type)) {
             e.val.1 <- lapply(meme.scores[[seq.type]][as.integer(rownames(cluster.summ))], 
-                function(i) i$meme.out[[1]]$e.value)
+                function(i) {
+                  mo <- i$meme.out
+                  if (length(mo) >= 1) 
+                    mo[[1]]$e.value
+                  else Inf
+                })
             for (i in 1:length(e.val.1)) if (is.null(e.val.1[[i]])) 
                 e.val.1[[i]] <- NA
             himg1 <- hwriteImage(sprintf("htmls/cluster%04d_pssm1.png", 
                 as.integer(rownames(cluster.summ))), table = F, 
-                title = sprintf("E-val = %.3g", unlist(e.val.1)))
+                title = sprintf("E-value = %.3g", unlist(e.val.1)))
             himg1 <- hwrite(paste(himg1, as.character(cluster.summ$consensus1), 
                 sep = "<br>"), center = TRUE, table = F)
             if (!is.null(seq.type)) 
                 e.val.2 <- lapply(meme.scores[[seq.type]][as.integer(rownames(cluster.summ))], 
-                  function(i) i$meme.out[[2]]$e.value)
+                  function(i) {
+                    mo <- i$meme.out
+                    if (length(mo) > 1) 
+                      mo[[2]]$e.value
+                    else Inf
+                  })
             else e.val.2 <- as.list(rep(NA, k.clust))
             for (i in 1:length(e.val.2)) if (is.null(e.val.2[[i]])) 
                 e.val.2[[i]] <- NA
             himg2 <- hwriteImage(sprintf("htmls/cluster%04d_pssm2.png", 
                 as.integer(rownames(cluster.summ))), table = F, 
-                title = sprintf("E-val = %.3g", unlist(e.val.2)))
+                title = sprintf("E-value = %.3g", unlist(e.val.2)))
             himg2 <- hwrite(paste(himg2, as.character(cluster.summ$consensus2), 
                 sep = "<br>"), center = TRUE, table = F)
             himg2a <- hwriteImage(sprintf("htmls/cluster%04d_mot_posns.png", 
@@ -5667,7 +6166,7 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
                 else cat(".")
                 if (length(rows[[k]]) <= 0) 
                   return()
-                tmp <- get.long.names(rows[[k]], short = T)
+                tmp <- get.long.names(rows[[k]], shorter = T)
                 tmp <- unique(tmp[!tmp %in% rows[[k]] & tmp != 
                   ""])
                 paste(tmp, collapse = " ")
@@ -5679,7 +6178,7 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
                 else cat(".")
                 if (length(rows[[k]]) <= 0) 
                   return()
-                tmp <- get.long.names(rows[[k]], short = F)
+                tmp <- get.long.names(rows[[k]], shorter = F)
                 tmp <- unique(tmp[!tmp %in% rows[[k]] & tmp != 
                   ""])
                 paste(tmp, collapse = " | ")
@@ -5732,12 +6231,12 @@ function (ks = sapply(as.list(clusterStack), "[[", "k"), para.cores = 1,
         }
         system(sprintf("gzip -v %s/svgs/*.svg", out.dir))
         for (f in list.files(paste(out.dir, "/svgs", sep = ""), 
-            full = T)) if (grepl(".svg.gz", f, fixed = T)) 
+            full.names = T)) if (grepl(".svg.gz", f, fixed = T)) 
             system(sprintf("mv -v %s %s", f, sub(".svg.gz", ".svgz", 
                 f, fixed = T)))
-        mc$apply(c(list.files(sprintf("%s/htmls", out.dir), pattern = glob2rx("*.html"), 
-            full = T), list.files(out.dir, pattern = glob2rx("*.html"), 
-            full = T)), function(f) {
+        lapply(c(list.files(sprintf("%s/htmls", out.dir), pattern = glob2rx("*.html"), 
+            full.names = T), list.files(out.dir, pattern = glob2rx("*.html"), 
+            full.names = T)), function(f) {
             cat(f, "\n")
             rpl(".svg\"", ".svgz\"", f, fixed = T)
         })

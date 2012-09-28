@@ -3,7 +3,7 @@
 \alias{cMonkey}
 \docType{package}
 \title{
-cMonkey intgrated biclustering algorithm
+cMonkey integrated biclustering algorithm
 }
 \description{
 cMonkey integrated biclustering algorithm for learning co-regulated gene modules
@@ -13,11 +13,10 @@ cMonkey integrated biclustering algorithm for learning co-regulated gene modules
 Package: \tab cMonkey\cr
 Type: \tab Package\cr
 Version: \tab 1.0\cr
-Date: \tab 2011-05-26\cr
+Date: \tab 2012-09-28\cr
 License: \tab GPL-2\cr
-LazyLoad: \tab yes\cr
 }
-\url{http://baliga.systemsbiology.net/cmonkey}
+\url{http://cmonkey.systemsbiology.net/}
 }
 \author{
 David J Reiss, Institute for Systems Biology
@@ -30,10 +29,10 @@ by David J Reiss, Nitin S Baliga and Richard Bonneau: \url{http://www.biomedcent
 }
 \keyword{ package }
 \seealso{
-\url{http://baliga.systemsbiology.net/cmonkey}
+\url{http://cmonkey.systemsbiology.net/}
 
 
 }
-\examples{
+%\examples{
  
-}
+%}
